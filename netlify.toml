@@ -1,8 +1,3 @@
 [build]
   command = "./build.sh"
   publish = "dist"
-
-[build.environment]
-  RUSTUP_TOOLCHAIN = "stable"
-  # Force cargo to be available in path
-  PATH = "/opt/buildhome/.cargo/bin:$PATH"

@@ -1,25 +1,26 @@
 #!/bin/bash
 set -e
 
-echo ">> CLEANING OLD ARTIFACTS..."
-rm -rf dist
+echo "--- STARTING ENGINE BUILD ---"
 mkdir -p dist
 
-echo ">> INSTALLING WASM-PACK..."
-curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-export PATH=$PATH:$HOME/.cargo/bin
+# Install wasm-pack to a local, reachable bin
+echo ">> Installing wasm-pack locally..."
+curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh -s -- --to $(pwd)
+export PATH=$(pwd):$PATH
 
-echo ">> COMPILING WASM (RELEASE MODE)..."
-cd crates/shell-wasm
-# Force a clean build of the wasm crate
-cargo clean
-wasm-pack build --target web --out-dir pkg --release
+echo ">> Verifying wasm-pack..."
+./wasm-pack --version
 
-echo ">> ASSEMBLING DISTRO..."
-cp index.html ../../dist/index.html
-cp -r pkg ../../dist/pkg
+echo ">> Building shell-wasm crate..."
+# Run wasm-pack from the root, pointing to the crate
+./wasm-pack build crates/shell-wasm --target web --out-dir ../../dist/pkg --release
 
-# Add a build timestamp to index.html for verification
-sed -i "s/Sovereign Shell/Sovereign Shell (Built: $(date +'%T'))/" ../../dist/index.html
+echo ">> Copying web assets..."
+cp crates/shell-wasm/index.html dist/index.html
 
-echo ">> DONE. Ready for Netlify."
+echo ">> Creating build manifest..."
+date > dist/BUILT_AT.txt
+
+echo "--- BUILD SUCCESSFUL ---"
+ls -R dist
