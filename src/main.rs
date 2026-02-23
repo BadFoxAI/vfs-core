@@ -1,3 +1,3 @@
 fn main() {
-    vfs_core::main();
+    println!("{}", vfs_core::run_suite());
 }
