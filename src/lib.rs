@@ -14,7 +14,7 @@ Build a sovereign, deterministic execution substrate (VFS + ABI).
     [x] 2.1 Implement VFS logic in VM.
     [x] 2.2 Implement Syscall Opcode (0xF0).
     [x] 2.3 First-Mover Compiler (Assembler).
-    [~] 2.4 Implement Memory + Control Flow (Loops).
+    [x] 2.4 Implement Memory + Control Flow (Loops).
     [ ] 2.5 Port TinyCC backend to Sovereign ABI.
 
 UNIT TEST SUITE:
@@ -28,28 +28,33 @@ pub enum Opcode {
     Syscall = 0xF0 
 }
 
-// --- TWO-PASS ASSEMBLER ---
+// --- TWO-PASS ASSEMBLER WITH PRE-PROCESSOR ---
 pub struct Compiler;
 impl Compiler {
     pub fn compile(source: &str) -> Result<Vec<u8>, String> {
+        // Pre-process: Strip comments and flatten
+        let clean_source: String = source.lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<&str>>()
+            .join(" ");
+
+        let tokens: Vec<&str> = clean_source.split_whitespace().collect();
         let mut labels = HashMap::new();
-        let tokens: Vec<&str> = source.split_whitespace().collect();
         
-        // Pass 1: Find Labels and calculate addresses
+        // Pass 1: Resolve Labels
         let mut addr = 0;
         for t in &tokens {
             if t.ends_with(':') {
-                let name = t.trim_end_matches(':');
-                labels.insert(name.to_string(), addr);
+                labels.insert(t.trim_end_matches(':').to_string(), addr);
             } else {
                 addr += match *t {
-                    "PUSH" | "JMP" | "JZ" => 9, // Opcode + u64
-                    _ => 1, // Simple Opcodes
+                    "PUSH" | "JMP" | "JZ" => 9,
+                    _ => 1,
                 };
             }
         }
 
-        // Pass 2: Generate Bytecode
+        // Pass 2: Emit Bytecode
         let mut bytecode = Vec::new();
         let mut i = 0;
         while i < tokens.len() {
@@ -70,13 +75,13 @@ impl Compiler {
                 "JMP" => {
                     bytecode.push(0x40);
                     i += 1;
-                    let target = labels.get(tokens[i]).ok_or(format!("Unknown Label: {}", tokens[i]))?;
+                    let target = labels.get(tokens[i]).ok_or(format!("Label Not Found: {}", tokens[i]))?;
                     bytecode.extend_from_slice(&(*target as u64).to_le_bytes());
                 }
                 "JZ" => {
                     bytecode.push(0x41);
                     i += 1;
-                    let target = labels.get(tokens[i]).ok_or(format!("Unknown Label: {}", tokens[i]))?;
+                    let target = labels.get(tokens[i]).ok_or(format!("Label Not Found: {}", tokens[i]))?;
                     bytecode.extend_from_slice(&(*target as u64).to_le_bytes());
                 }
                 "SYSCALL" => bytecode.push(0xF0),
@@ -88,10 +93,10 @@ impl Compiler {
     }
 }
 
-// --- VM WITH HEAP MEMORY ---
+// --- SOVEREIGN VM ---
 pub struct Machine {
     pub stack: Vec<u64>,
-    pub memory: [u64; 1024], // 8KB Heap
+    pub memory: [u64; 1024],
     pub ip: usize,
     pub program: Vec<u8>,
     pub vfs: HashMap<String, Vec<u8>>,
@@ -107,47 +112,47 @@ impl Machine {
         self.ip += 1;
         match op {
             0x00 => return Ok(false),
-            0x10 => { // PUSH
+            0x10 => {
                 let val = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap());
                 self.ip += 8;
                 self.stack.push(val);
             }
-            0x20 => { // ADD
+            0x20 => {
                 let b = self.stack.pop().unwrap();
                 let a = self.stack.pop().unwrap();
                 self.stack.push(a + b);
             }
-            0x21 => { // SUB
+            0x21 => {
                 let b = self.stack.pop().unwrap();
                 let a = self.stack.pop().unwrap();
                 self.stack.push(a.saturating_sub(b));
             }
-            0x30 => { // LOAD (addr on stack)
+            0x30 => {
                 let addr = self.stack.pop().unwrap() as usize;
                 self.stack.push(self.memory[addr]);
             }
-            0x31 => { // STORE (val, addr on stack)
+            0x31 => {
                 let addr = self.stack.pop().unwrap() as usize;
                 let val = self.stack.pop().unwrap();
                 self.memory[addr] = val;
             }
-            0x40 => { // JMP
+            0x40 => {
                 let target = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap());
                 self.ip = target as usize;
             }
-            0x41 => { // JZ (Jump if zero)
+            0x41 => {
                 let target = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap());
                 let cond = self.stack.pop().unwrap();
                 if cond == 0 { self.ip = target as usize; } else { self.ip += 8; }
             }
-            0xF0 => { // SYSCALL
+            0xF0 => {
                 let sys_id = self.stack.pop().unwrap();
                 if sys_id == 1 {
                     let val = self.stack.pop().unwrap();
                     self.vfs.insert("out.dat".to_string(), val.to_le_bytes().to_vec());
                 }
             }
-            _ => return Err(format!("Op: 0x{:02X}", op)),
+            _ => return Err(format!("0x{:02X}", op)),
         }
         Ok(true)
     }
@@ -157,8 +162,6 @@ pub fn run_suite() -> String {
     let mut report = String::from(MANIFESTO);
     report.push_str("TEST: LOOP_MULT_5_BY_3 ... ");
 
-    // Source: Multiply 5 * 3 by adding 5, three times.
-    // Mem 0 = Result, Mem 1 = Counter
     let source = "
         PUSH 0 PUSH 0 STORE    // Result = 0
         PUSH 3 PUSH 1 STORE    // Counter = 3
@@ -175,11 +178,16 @@ pub fn run_suite() -> String {
     match Compiler::compile(source) {
         Ok(code) => {
             let mut vm = Machine::new(code);
-            while let Ok(true) = vm.step() {}
-            let bytes = vm.vfs.get("out.dat").unwrap();
-            let val = u64::from_le_bytes(bytes.clone().try_into().unwrap());
-            if val == 15 { report.push_str("PASS\n"); }
-            else { report.push_str(&format!("FAIL ({})\n", val)); }
+            let mut fuel = 1000;
+            while let Ok(true) = vm.step() {
+                fuel -= 1;
+                if fuel == 0 { break; }
+            }
+            if let Some(bytes) = vm.vfs.get("out.dat") {
+                let val = u64::from_le_bytes(bytes.clone().try_into().unwrap());
+                if val == 15 { report.push_str("PASS\n"); }
+                else { report.push_str(&format!("FAIL (Result {})\n", val)); }
+            } else { report.push_str("FAIL (VFS EMPTY)\n"); }
         }
         Err(e) => report.push_str(&format!("ERR: {}\n", e)),
     }
