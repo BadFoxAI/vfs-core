@@ -5,17 +5,12 @@
     <title>vfs-core // parity</title>
 </head>
 <body style="background: #111; color: #0f0; font-family: monospace; padding: 2rem;">
-    <pre id="term">> Loading Sovereign Engine...</pre>
+    <pre id="term">> Loading...</pre>
     <script type="module">
-        // Points to the pkg folder at the root
         import init, { init_shell } from './pkg/shell_wasm.js';
         async function run() {
-            try {
-                await init();
-                document.getElementById("term").innerText = init_shell();
-            } catch (e) {
-                document.getElementById("term").innerText = "FATAL: " + e;
-            }
+            await init();
+            document.getElementById("term").innerText = init_shell();
         }
         run();
     </script>
