@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "crates/vfs",
+    "crates/abi",
+    "crates/compiler",
+    "crates/shell-cli",
+    "crates/shell-wasm"
+]
+resolver = "2"

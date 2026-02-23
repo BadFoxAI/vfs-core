@@ -1,0 +1,9 @@
+[build]
+  # Install wasm-pack and build the crate
+  command = "curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && cd crates/shell-wasm && wasm-pack build --target web"
+  # The directory that contains index.html and the generated pkg/ folder
+  publish = "crates/shell-wasm"
+
+[build.environment]
+  # Ensure standard Rust environment
+  RUSTUP_TOOLCHAIN = "stable"

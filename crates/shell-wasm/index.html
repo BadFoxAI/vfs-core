@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vfs-core // sovereign substrate</title>
+    <style>
+        body { background: #111; color: #eee; font-family: monospace; padding: 2rem; }
+        #term { white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>vfs-core</h1>
+    <div id="term">> Booting WASM Shell...</div>
+    <script type="module">
+        import init, { init_shell } from './pkg/shell_wasm.js';
+
+        async function run() {
+            await init();
+            const status = init_shell();
+            document.getElementById("term").innerText += "\n> " + status;
+        }
+        run();
+    </script>
+</body>
+</html>
