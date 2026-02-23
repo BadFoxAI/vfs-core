@@ -1,11 +1,9 @@
 use wasm_bindgen::prelude::*;
-use vfs::Vfs;
 
-// The WASM Host Shell
-// Maps Internal ABI syscalls to Browser APIs.
+// We need to verify VFS linking later, for now, let's just get the WASM binary executing.
+// use vfs::Vfs; 
 
 #[wasm_bindgen]
 pub fn init_shell() -> String {
-    // This will eventually hook into the VFS and ABI
-    "vfs-core: WASM Shell Initialized. Sovereignty established.".to_string()
+    "vfs-core: WASM Shell Online. Artifact executable.".to_string()
 }
