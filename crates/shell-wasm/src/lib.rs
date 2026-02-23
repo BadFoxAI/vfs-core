@@ -4,6 +4,7 @@ use abi::isa::Opcode;
 
 #[wasm_bindgen]
 pub fn init_shell() -> String {
+    // Defines: 10 + 20
     let program = vec![
         Opcode::Push as u8, 
         10, 0, 0, 0, 0, 0, 0, 0, 
@@ -14,24 +15,25 @@ pub fn init_shell() -> String {
     ];
 
     let mut vm = Machine::new(program);
-    let mut log = String::from("WASM VM Boot sequence initiated...\n");
+    let mut log = String::from(">> WASM VM Booting...\n");
 
     loop {
         match vm.step() {
             Ok(VMStatus::Running) => {}
             Ok(VMStatus::Halted) => {
-                log.push_str(&format!("VM Halted. Result: {:?}\n", vm.stack.last()));
+                // If this prints "30", we have parity.
+                log.push_str(&format!(">> VM Halted. Result: {:?}\n", vm.stack.last()));
                 break;
             }
             Ok(VMStatus::Syscall(id)) => {
-                log.push_str(&format!("Syscall: {}\n", id));
+                log.push_str(&format!(">> Syscall: {}\n", id));
             }
             Err(e) => {
-                log.push_str(&format!("CRASH: {}\n", e));
+                log.push_str(&format!(">> CRASH: {}\n", e));
                 break;
             }
         }
     }
     
-    log + "Sovereignty Parity Confirmed."
+    log + ">> Parity Check Complete."
 }
