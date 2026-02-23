@@ -2,25 +2,15 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>vfs-core // SOVEREIGN</title>
-    <style>
-        /* RED BACKGROUND = NEW VERSION DEPLOYED */
-        body { background: #400; color: #fff; font-family: monospace; padding: 2rem; }
-        #term { background: #000; padding: 1rem; border: 1px solid #f00; white-space: pre-wrap; }
-    </style>
+    <title>vfs-core // parity</title>
 </head>
-<body>
-    <h1>VFS-CORE: WASM_HOST</h1>
-    <div id="term">> INITIALIZING ENGINE...</div>
+<body style="background: #111; color: #0f0; font-family: monospace;">
+    <pre id="term">> Loading...</pre>
     <script type="module">
         import init, { init_shell } from './pkg/shell_wasm.js';
         async function run() {
-            try {
-                await init();
-                document.getElementById("term").innerText = init_shell();
-            } catch (e) {
-                document.getElementById("term").innerText = "FATAL: " + e;
-            }
+            await init();
+            document.getElementById("term").innerText = init_shell();
         }
         run();
     </script>
