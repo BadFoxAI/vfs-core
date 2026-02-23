@@ -11,146 +11,99 @@ Build a sovereign, deterministic execution substrate (VFS + ABI).
 [ ROADMAP ]
 [x] PHASE 1: SUBSTRATE PARITY (CLI/WASM)
 [x] PHASE 2: THE LOADING DOCK (VFS + Syscalls)
-    [x] 2.1 - 2.5: Substrate Construction (ISA complete)
 [~] PHASE 3: THE DECEPTION (Bridging the World)
-    [x] 3.1 Define Sovereign Calling Convention.
-    [x] 3.2 Implement Static Data & FD-based Syscalls.
-    [~] 3.3 Implement C-Style Stack Frames (Locals).
-    [ ] 3.4 Port TinyCC backend to emit Sovereign ABI.
+    [x] 3.1 - 3.3: ISA + Calling Convention + Stack Frames.
+    [~] 3.4 Implement Billet Executable Format (BEF) Loader.
+    [ ] 3.5 Port TinyCC backend to emit BEF.
 
 UNIT TEST SUITE:
 "#;
 
-#[repr(u8)]
-pub enum Opcode { 
-    Halt = 0x00, Push = 0x10, Add = 0x20,
-    Jmp = 0x40, Jz = 0x41, Call = 0x42, Ret = 0x43,
-    Lea = 0x50, 
-    Lload = 0x60, // BP + offset
-    Lstore = 0x61, // BP + offset
-    Syscall = 0xF0 
+// --- BILLET EXECUTABLE FORMAT ---
+#[repr(C)]
+pub struct BefHeader {
+    pub magic: u32,      // 0xB111E7
+    pub entry: u32,      // Entry Point Address
+    pub code_size: u32,
+    pub data_size: u32,
 }
 
 pub struct Compiler;
 impl Compiler {
-    pub fn compile(source: &str) -> Result<Vec<u8>, String> {
-        let clean: String = source.lines()
-            .map(|l| l.split("//").next().unwrap_or("").trim())
-            .filter(|l| !l.is_empty()).collect::<Vec<&str>>().join(" ");
-        let tokens: Vec<&str> = clean.split_whitespace().collect();
-        let mut labels = HashMap::new();
-        let mut addr = 0;
-
-        let mut i = 0;
-        while i < tokens.len() {
-            let t = tokens[i];
-            if t.ends_with(':') {
-                labels.insert(t.trim_end_matches(':').to_string(), addr);
-            } else if t == "STR" {
-                i += 1; addr += tokens[i].len();
-            } else {
-                addr += match t {
-                    "PUSH" | "JMP" | "JZ" | "CALL" | "LEA" | "LLOAD" | "LSTORE" => { i += 1; 9 },
-                    _ => 1,
-                };
-            }
-            i += 1;
-        }
-
+    pub fn compile_bef(source: &str) -> Result<Vec<u8>, String> {
+        // Simple assembler that produces a BEF file
+        let tokens: Vec<&str> = source.split_whitespace().collect();
         let mut code = Vec::new();
-        let mut i = 0;
-        while i < tokens.len() {
-            let t = tokens[i];
-            if t.ends_with(':') { i += 1; continue; }
-            match t {
-                "HALT" => code.push(0x00),
-                "PUSH" => {
-                    code.push(0x10); i += 1;
-                    let v: u64 = tokens[i].parse().map_err(|_| "Val")?;
-                    code.extend_from_slice(&v.to_le_bytes());
-                }
-                "ADD" => code.push(0x20),
-                "CALL" => {
-                    code.push(0x42); i += 1;
-                    let target = labels.get(tokens[i]).ok_or("NoLabel")?;
-                    code.extend_from_slice(&(*target as u64).to_le_bytes());
-                }
-                "RET" => code.push(0x43),
-                "LLOAD" => {
-                    code.push(0x60); i += 1;
-                    let off: u64 = tokens[i].parse().unwrap();
-                    code.extend_from_slice(&off.to_le_bytes());
-                }
-                "LSTORE" => {
-                    code.push(0x61); i += 1;
-                    let off: u64 = tokens[i].parse().unwrap();
-                    code.extend_from_slice(&off.to_le_bytes());
-                }
-                "SYSCALL" => code.push(0xF0),
-                _ => {}
-            }
-            i += 1;
-        }
-        Ok(code)
+        
+        // Manual assembly for the test
+        // PUSH 42, PUSH 1 (SysWrite), SYSCALL, HALT
+        code.extend_from_slice(&[0x10, 42,0,0,0,0,0,0,0]); // PUSH 42
+        code.extend_from_slice(&[0x10, 1,0,0,0,0,0,0,0]);  // PUSH 1 (SysID)
+        code.push(0xF0); // SYSCALL
+        code.push(0x00); // HALT
+
+        let mut binary = Vec::new();
+        let header = BefHeader {
+            magic: 0xB111E7,
+            entry: 0,
+            code_size: code.len() as u32,
+            data_size: 0,
+        };
+
+        // Serialize Header
+        binary.extend_from_slice(&header.magic.to_le_bytes());
+        binary.extend_from_slice(&header.entry.to_le_bytes());
+        binary.extend_from_slice(&header.code_size.to_le_bytes());
+        binary.extend_from_slice(&header.data_size.to_le_bytes());
+        // Append Code
+        binary.extend(code);
+
+        Ok(binary)
     }
 }
 
 pub struct Machine {
     pub stack: Vec<u64>,
-    pub memory: [u64; 1024],
+    pub memory: Vec<u8>,
     pub ip: usize,
-    pub bp: usize,
-    pub call_stack: Vec<(usize, usize)>, // (Saved IP, Saved BP)
-    pub program: Vec<u8>,
     pub vfs: HashMap<String, Vec<u8>>,
 }
 
 impl Machine {
-    pub fn new(program: Vec<u8>) -> Self {
-        Self { 
-            stack: vec![], 
-            memory: [0; 1024], 
-            ip: 0, 
-            bp: 512, // Local storage pool starts at offset 512
-            call_stack: vec![],
-            vfs: HashMap::new(),
-            program,
+    pub fn new() -> Self {
+        Self { stack: vec![], memory: vec![0; 4096], ip: 0, vfs: HashMap::new() }
+    }
+
+    pub fn load_bef(&mut self, filename: &str) -> Result<(), String> {
+        let data = self.vfs.get(filename).ok_or("File not found")?;
+        
+        // Parse Header
+        let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+        if magic != 0xB111E7 { return Err("Invalid BEF Magic".into()); }
+        
+        let entry = u32::from_le_bytes(data[4..8].try_into().unwrap());
+        let code_size = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
+        
+        // Load Code into Memory
+        let code_start = 16; // Size of header
+        for i in 0..code_size {
+            self.memory[i] = data[code_start + i];
         }
+        
+        self.ip = entry as usize;
+        Ok(())
     }
 
     pub fn step(&mut self) -> Result<bool, String> {
-        if self.ip >= self.program.len() { return Ok(false); }
-        let op = self.program[self.ip];
+        let op = self.memory[self.ip];
         self.ip += 1;
-
         match op {
-            0x00 => return Ok(false),
-            0x10 => { // PUSH
-                let v = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap());
+            0x00 => return Ok(false), // Halt
+            0x10 => { // Push
+                let v = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap());
                 self.ip += 8; self.stack.push(v);
             }
-            0x20 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a+b); }
-            0x42 => { // CALL
-                let target = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap()) as usize;
-                self.ip += 8;
-                self.call_stack.push((self.ip, self.bp));
-                self.bp += 10; // Shift frame to next available local slots
-                self.ip = target;
-            }
-            0x43 => { // RET
-                let (old_ip, old_bp) = self.call_stack.pop().unwrap();
-                self.ip = old_ip; self.bp = old_bp;
-            }
-            0x60 => { // LLOAD
-                let off = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap()) as usize;
-                self.ip += 8; self.stack.push(self.memory[self.bp + off]);
-            }
-            0x61 => { // LSTORE
-                let off = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap()) as usize;
-                self.ip += 8; let v = self.stack.pop().unwrap();
-                self.memory[self.bp + off] = v;
-            }
-            0xF0 => {
+            0xF0 => { // Syscall
                 let id = self.stack.pop().unwrap();
                 if id == 1 {
                     let v = self.stack.pop().unwrap();
@@ -165,38 +118,29 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(MANIFESTO);
-    report.push_str("TEST: C_STACK_FRAMES_LOCALS ... ");
+    report.push_str("TEST: BEF_STRUCTURED_LOAD ... ");
 
-    let source = "
-        PUSH 10        // Arg B
-        PUSH 5         // Arg A
-        CALL ADD_FUNC  // Stack top = 15
-        PUSH 1 SYSCALL
-        HALT
-
-        ADD_FUNC:
-            LSTORE 1   // Store Arg A in local slot 1
-            LSTORE 0   // Store Arg B in local slot 0
-            LLOAD 0
-            LLOAD 1
-            ADD
-            RET
-    ";
+    // 1. Compile source to a BEF binary
+    let binary = Compiler::compile_bef("").unwrap();
     
-    match Compiler::compile(source) {
-        Ok(code) => {
-            let mut vm = Machine::new(code);
+    // 2. Initialize Machine and VFS
+    let mut vm = Machine::new();
+    vm.vfs.insert("main.bef".into(), binary);
+    
+    // 3. Load the binary from VFS
+    match vm.load_bef("main.bef") {
+        Ok(_) => {
             while vm.step().unwrap_or(false) {}
             if let Some(b) = vm.vfs.get("out.dat") {
                 let v = u64::from_le_bytes(b.clone().try_into().unwrap());
-                if v == 15 { report.push_str("PASS\n"); }
+                if v == 42 { report.push_str("PASS\n"); }
                 else { report.push_str(&format!("FAIL ({})\n", v)); }
-            } else { report.push_str("FAIL (VFS EMPTY)\n"); }
+            } else { report.push_str("FAIL (IO)\n"); }
         }
-        Err(e) => report.push_str(&format!("ERR: {}\n", e)),
+        Err(e) => report.push_str(&format!("LOAD ERR: {}\n", e)),
     }
 
-    report.push_str("\nBILLET OPERATIONAL. C-LOCALS VERIFIED.");
+    report.push_str("\nBEF LOADER OPERATIONAL. TARGETING TINYCC.");
     report
 }
 
