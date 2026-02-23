@@ -1,8 +1,10 @@
 // Internal Application Binary Interface (ABI)
-// Defines the minimal execution contract and syscall surface.
-// This is not WASM. This is not POSIX.
+pub mod isa;
 
-pub const SYSCALL_VFS_READ: u32 = 1;
-pub const SYSCALL_VFS_WRITE: u32 = 2;
-pub const SYSCALL_MEM_ALLOC: u32 = 3;
-pub const SYSCALL_DEBUG_OUT: u32 = 4;
+// System Call Constants
+// These match the 'Syscall' opcode arguments.
+pub const SYSCALL_VFS_READ: u64 = 1;
+pub const SYSCALL_VFS_WRITE: u64 = 2;
+pub const SYSCALL_MEM_ALLOC: u64 = 3;
+pub const SYSCALL_DEBUG_OUT: u64 = 4;
+pub mod vm;

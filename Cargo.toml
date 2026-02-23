@@ -4,6 +4,7 @@ members = [
     "crates/abi",
     "crates/compiler",
     "crates/shell-cli",
-    "crates/shell-wasm"
+    "crates/shell-wasm",
+    "crates/living-spec"
 ]
 resolver = "2"
