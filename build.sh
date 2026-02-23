@@ -1,17 +1,25 @@
 #!/bin/bash
 set -e
 
-echo ">> Installing wasm-pack..."
+echo ">> CLEANING OLD ARTIFACTS..."
+rm -rf dist
+mkdir -p dist
+
+echo ">> INSTALLING WASM-PACK..."
 curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+export PATH=$PATH:$HOME/.cargo/bin
 
-echo ">> Building shell-wasm..."
+echo ">> COMPILING WASM (RELEASE MODE)..."
 cd crates/shell-wasm
-wasm-pack build --target web --out-dir pkg
+# Force a clean build of the wasm crate
+cargo clean
+wasm-pack build --target web --out-dir pkg --release
 
-echo ">> Assembling Distribution..."
-# Create a specific dist folder to serve
-mkdir -p ../../dist
+echo ">> ASSEMBLING DISTRO..."
 cp index.html ../../dist/index.html
 cp -r pkg ../../dist/pkg
 
-echo ">> Build Complete. Artifacts ready in /dist"
+# Add a build timestamp to index.html for verification
+sed -i "s/Sovereign Shell/Sovereign Shell (Built: $(date +'%T'))/" ../../dist/index.html
+
+echo ">> DONE. Ready for Netlify."

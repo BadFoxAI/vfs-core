@@ -2,23 +2,27 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>vfs-core // sovereign substrate</title>
     <style>
-        body { background: #111; color: #0f0; font-family: monospace; padding: 2rem; }
+        body { background: #000; color: #0f0; font-family: monospace; padding: 2rem; line-height: 1.5; }
         #term { white-space: pre-wrap; }
+        .timestamp { color: #555; font-size: 0.8rem; margin-bottom: 1rem; }
     </style>
 </head>
 <body>
-    <h1>vfs-core</h1>
-    <div id="term">> Booting Sovereign Shell...</div>
+    <div class="timestamp">NODE: WASM_HOST // STATUS: ONLINE</div>
+    <h1>vfs-core: Sovereign Shell</h1>
+    <div id="term">> Initializing...</div>
     <script type="module">
         import init, { init_shell } from './pkg/shell_wasm.js';
-
         async function run() {
-            await init();
-            const status = init_shell();
-            document.getElementById("term").innerText += "\n> " + status;
+            try {
+                await init();
+                const status = init_shell();
+                document.getElementById("term").innerText = status;
+            } catch (e) {
+                document.getElementById("term").innerText = "BOOT ERROR: " + e;
+            }
         }
         run();
     </script>
