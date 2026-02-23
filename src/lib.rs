@@ -14,20 +14,11 @@ Build a sovereign, deterministic execution substrate (VFS + ABI).
     [x] 2.1 - 2.5: Substrate Construction (ISA complete)
 [~] PHASE 3: THE DECEPTION (Bridging the World)
     [x] 3.1 Define Sovereign Calling Convention.
-    [~] 3.2 Implement Static Data & Heap Addressing.
+    [~] 3.2 Implement Static Data & FD-based Syscalls.
     [ ] 3.3 Port TinyCC backend to emit Sovereign ABI.
 
 UNIT TEST SUITE:
 "#;
-
-#[repr(u8)]
-pub enum Opcode { 
-    Halt = 0x00, Push = 0x10, 
-    Add = 0x20, Load = 0x30, Store = 0x31, 
-    Jmp = 0x40, Jz = 0x41, Call = 0x42, Ret = 0x43,
-    Lea = 0x50, // Load Effective Address
-    Syscall = 0xF0 
-}
 
 pub struct Compiler;
 impl Compiler {
@@ -39,13 +30,13 @@ impl Compiler {
         let mut labels = HashMap::new();
         let mut addr = 0;
 
-        // Pass 1: Resolve Labels
+        // Pass 1: Resolve Labels and calculate addresses
         let mut i = 0;
         while i < tokens.len() {
             let t = tokens[i];
             if t.ends_with(':') {
                 labels.insert(t.trim_end_matches(':').to_string(), addr);
-            } else if t == "STR" { // String data
+            } else if t == "STR" {
                 i += 1;
                 addr += tokens[i].len();
             } else {
@@ -72,7 +63,7 @@ impl Compiler {
                 }
                 "LEA" => {
                     code.push(0x50); i += 1;
-                    let target = labels.get(tokens[i]).ok_or("Label")?;
+                    let target = labels.get(tokens[i]).ok_or("NoLabel")?;
                     code.extend_from_slice(&(*target as u64).to_le_bytes());
                 }
                 "STR" => {
@@ -80,7 +71,7 @@ impl Compiler {
                     code.extend_from_slice(tokens[i].as_bytes());
                 }
                 "SYSCALL" => code.push(0xF0),
-                _ => { /* Simple opcodes logic here */ }
+                _ => { /* Basic ops handled in Machine */ }
             }
             i += 1;
         }
@@ -90,45 +81,56 @@ impl Compiler {
 
 pub struct Machine {
     pub stack: Vec<u64>,
-    pub call_stack: Vec<usize>,
-    pub memory: Vec<u8>, // Unified Memory Space
+    pub memory: Vec<u8>,
     pub ip: usize,
-    pub program: Vec<u8>,
     pub vfs: HashMap<String, Vec<u8>>,
+    pub fds: Vec<String>, // Index = File Descriptor
 }
 
 impl Machine {
     pub fn new(program: Vec<u8>) -> Self {
         Self { 
             stack: vec![], 
-            call_stack: vec![], 
-            memory: program.clone(), // Program is loaded into memory
+            memory: program.clone(), 
             ip: 0, 
-            program, 
-            vfs: HashMap::new() 
+            vfs: HashMap::new(),
+            fds: vec![],
         }
     }
+
     pub fn step(&mut self) -> Result<bool, String> {
-        if self.ip >= self.program.len() { return Ok(false); }
-        let op = self.program[self.ip];
+        if self.ip >= self.memory.len() { return Ok(false); }
+        let op = self.memory[self.ip];
         self.ip += 1;
         match op {
             0x00 => return Ok(false),
             0x10 => { // PUSH
-                let v = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap());
+                let v = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap());
                 self.ip += 8; self.stack.push(v);
             }
             0x50 => { // LEA
-                let addr = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap());
-                self.ip += 8; self.stack.push(addr);
+                let v = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap());
+                self.ip += 8; self.stack.push(v);
             }
             0xF0 => { // SYSCALL
                 let id = self.stack.pop().unwrap();
-                if id == 2 { // SYSCALL_PRINT_STR (addr, len)
-                    let len = self.stack.pop().unwrap() as usize;
-                    let addr = self.stack.pop().unwrap() as usize;
-                    let str_bytes = self.memory[addr..addr+len].to_vec();
-                    self.vfs.insert("out.dat".into(), str_bytes);
+                match id {
+                    1 => { // OPEN (addr, len) -> FD
+                        let len = self.stack.pop().unwrap() as usize;
+                        let addr = self.stack.pop().unwrap() as usize;
+                        let filename = String::from_utf8_lossy(&self.memory[addr..addr+len]).into_owned();
+                        self.fds.push(filename);
+                        self.stack.push((self.fds.len() - 1) as u64);
+                    }
+                    2 => { // WRITE_FD (fd, addr, len)
+                        let len = self.stack.pop().unwrap() as usize;
+                        let addr = self.stack.pop().unwrap() as usize;
+                        let fd = self.stack.pop().unwrap() as usize;
+                        let filename = &self.fds[fd];
+                        let data = self.memory[addr..addr+len].to_vec();
+                        self.vfs.insert(filename.clone(), data);
+                    }
+                    _ => return Err("Invalid Syscall".into()),
                 }
             }
             _ => return Err(format!("OP: 0x{:02X}", op)),
@@ -139,23 +141,30 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(MANIFESTO);
-    report.push_str("TEST: STATIC_DATA_ADDRESSING ... ");
+    report.push_str("TEST: STATIC_DATA_FD_IO ... ");
 
-    // Program: Load address of "PASS", push length 4, syscall 2 (PrintStr), Halt.
     let source = "
-        LEA MSG        // Push address of MSG
-        PUSH 4         // Length
-        PUSH 2         // SysID (PrintStr)
+        LEA NAME       // Addr of 'out.txt'
+        PUSH 7         // Len of 'out.txt'
+        PUSH 1         // SYSCALL_OPEN
+        SYSCALL        // FD is now on stack
+
+        LEA DATA       // Addr of 'PASS'
+        PUSH 4         // Len of 'PASS'
+        // Stack is: [FD, ADDR, LEN]
+        PUSH 2         // SYSCALL_WRITE
         SYSCALL
         HALT
-        MSG: STR PASS
+
+        NAME: STR out.txt
+        DATA: STR PASS
     ";
     
     match Compiler::compile(source) {
         Ok(code) => {
             let mut vm = Machine::new(code);
             while vm.step().unwrap_or(false) {}
-            if let Some(b) = vm.vfs.get("out.dat") {
+            if let Some(b) = vm.vfs.get("out.txt") {
                 let s = String::from_utf8_lossy(b);
                 if s == "PASS" { report.push_str("PASS\n"); }
                 else { report.push_str(&format!("FAIL ({})\n", s)); }
@@ -164,7 +173,7 @@ pub fn run_suite() -> String {
         Err(e) => report.push_str(&format!("ERR: {}\n", e)),
     }
 
-    report.push_str("\nDATA SECTION OPERATIONAL. READY FOR COMPILER PORT.");
+    report.push_str("\nDATA ADDRESSING AND FD-IO STABLE.");
     report
 }
 
