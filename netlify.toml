@@ -1,3 +1,3 @@
 [build]
-  command = "echo 'Deploying pre-compiled pkg'"
-  publish = "crates/shell-wasm"
+  command = "echo 'Deploying root artifacts'"
+  publish = "."
