@@ -1,14 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>vfs-core // parity</title>
-</head>
+<html>
 <body style="background: #111; color: #0f0; font-family: monospace; padding: 2rem;">
-    <pre id="term">> Loading...</pre>
+    <pre id="term">> Booting...</pre>
     <script type="module">
-        import init, { init_shell } from './pkg/shell_wasm.js';
-        async function run() {
+        import init, { init_shell } from './pkg/vfs_core.js';
+        async fn run() {
             await init();
             document.getElementById("term").innerText = init_shell();
         }

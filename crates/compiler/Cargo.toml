@@ -1,8 +1,0 @@
-[package]
-name = "compiler"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-vfs = { path = "../vfs" }
-abi = { path = "../abi" }
