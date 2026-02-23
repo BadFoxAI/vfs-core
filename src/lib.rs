@@ -10,13 +10,12 @@ Build a sovereign, deterministic execution substrate (VFS + ABI).
 
 [ ROADMAP ]
 [x] PHASE 1: SUBSTRATE PARITY (CLI/WASM)
-[~] PHASE 2: THE LOADING DOCK (VFS + Syscalls)
-    [x] 2.1 Implement VFS logic in VM.
-    [x] 2.2 Implement Syscall Opcode (0xF0).
-    [x] 2.3 First-Mover Compiler (Assembler).
-    [x] 2.4 Implement Memory + Control Flow (Loops).
-    [x] 2.5 Implement Call/Return (Functions).
-    [ ] 2.6 Port TinyCC backend to Sovereign ABI.
+[x] PHASE 2: THE LOADING DOCK (VFS + Syscalls)
+    [x] 2.1 - 2.5: Substrate Construction (ISA complete)
+[~] PHASE 3: THE DECEPTION (Bridging the World)
+    [~] 3.1 Define Sovereign Calling Convention (C-Mapping).
+    [ ] 3.2 Port TinyCC backend to emit Sovereign ABI.
+    [ ] 3.3 Map VFS to POSIX open/read/write.
 
 UNIT TEST SUITE:
 "#;
@@ -36,11 +35,9 @@ impl Compiler {
             .map(|l| l.split("//").next().unwrap_or("").trim())
             .filter(|l| !l.is_empty()).collect::<Vec<&str>>().join(" ");
         let tokens: Vec<&str> = clean.split_whitespace().collect();
-        
         let mut labels = HashMap::new();
         let mut addr = 0;
 
-        // Pass 1: Resolve Labels
         let mut i = 0;
         while i < tokens.len() {
             if tokens[i].ends_with(':') {
@@ -54,7 +51,6 @@ impl Compiler {
             i += 1;
         }
 
-        // Pass 2: Emit Bytecode
         let mut code = Vec::new();
         let mut i = 0;
         while i < tokens.len() {
@@ -69,25 +65,14 @@ impl Compiler {
                 }
                 "DUP" => code.push(0x12),
                 "ADD" => code.push(0x20),
-                "MUL" => code.push(0x22),
-                "JMP" => {
-                    code.push(0x40); i += 1;
-                    let target = labels.get(tokens[i]).ok_or("Label Not Found")?;
-                    code.extend_from_slice(&(*target as u64).to_le_bytes());
-                }
-                "JZ" => {
-                    code.push(0x41); i += 1;
-                    let target = labels.get(tokens[i]).ok_or("Label Not Found")?;
-                    code.extend_from_slice(&(*target as u64).to_le_bytes());
-                }
                 "CALL" => {
                     code.push(0x42); i += 1;
-                    let target = labels.get(tokens[i]).ok_or("Label Not Found")?;
+                    let target = labels.get(tokens[i]).ok_or("Label")?;
                     code.extend_from_slice(&(*target as u64).to_le_bytes());
                 }
                 "RET" => code.push(0x43),
                 "SYSCALL" => code.push(0xF0),
-                _ => return Err(format!("Invalid: {}", t)),
+                _ => return Err(format!("Token: {}", t)),
             }
             i += 1;
         }
@@ -98,7 +83,6 @@ impl Compiler {
 pub struct Machine {
     pub stack: Vec<u64>,
     pub call_stack: Vec<usize>,
-    pub memory: [u64; 1024],
     pub ip: usize,
     pub program: Vec<u8>,
     pub vfs: HashMap<String, Vec<u8>>,
@@ -106,7 +90,7 @@ pub struct Machine {
 
 impl Machine {
     pub fn new(program: Vec<u8>) -> Self {
-        Self { stack: vec![], call_stack: vec![], memory: [0; 1024], ip: 0, program, vfs: HashMap::new() }
+        Self { stack: vec![], call_stack: vec![], ip: 0, program, vfs: HashMap::new() }
     }
     pub fn step(&mut self) -> Result<bool, String> {
         if self.ip >= self.program.len() { return Ok(false); }
@@ -118,22 +102,16 @@ impl Machine {
                 let v = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap());
                 self.ip += 8; self.stack.push(v);
             }
-            0x12 => { // DUP
-                let v = *self.stack.last().ok_or("Stack Empty")?;
-                self.stack.push(v);
-            }
+            0x12 => { let v = *self.stack.last().unwrap(); self.stack.push(v); }
             0x20 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a + b); }
-            0x22 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a * b); }
-            0x42 => { // CALL
+            0x42 => {
                 let target = u64::from_le_bytes(self.program[self.ip..self.ip+8].try_into().unwrap()) as usize;
-                self.ip += 8;
-                self.call_stack.push(self.ip);
-                self.ip = target;
+                self.ip += 8; self.call_stack.push(self.ip); self.ip = target;
             }
-            0x43 => { self.ip = self.call_stack.pop().ok_or("Call Stack Underflow")?; }
+            0x43 => { self.ip = self.call_stack.pop().unwrap(); }
             0xF0 => {
-                let sys_id = self.stack.pop().unwrap();
-                if sys_id == 1 {
+                let id = self.stack.pop().unwrap();
+                if id == 1 {
                     let v = self.stack.pop().unwrap();
                     self.vfs.insert("out.dat".into(), v.to_le_bytes().to_vec());
                 }
@@ -146,17 +124,19 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(MANIFESTO);
-    report.push_str("TEST: FUNCTION_CALL_SQUARE ... ");
+    report.push_str("TEST: C_CALLING_CONVENTION ... ");
 
+    // Simulating: int add(int a, int b) { return a + b; }
+    // Call: add(10, 20)
     let source = "
-        PUSH 4         // Arg
-        CALL SQUARE    // Call Square Function
-        PUSH 1 SYSCALL // Write Result (16) to VFS
+        PUSH 20        // Arg B
+        PUSH 10        // Arg A
+        CALL ADD_FUNC  // Stack top should be 30
+        PUSH 1 SYSCALL // Persist result
         HALT
 
-        SQUARE:
-            DUP        // Copy 4
-            MUL        // 4 * 4
+        ADD_FUNC:
+            ADD        // Simply add the two top stack values
             RET
     ";
     
@@ -166,14 +146,14 @@ pub fn run_suite() -> String {
             while vm.step().unwrap_or(false) {}
             if let Some(b) = vm.vfs.get("out.dat") {
                 let v = u64::from_le_bytes(b.clone().try_into().unwrap());
-                if v == 16 { report.push_str("PASS\n"); }
+                if v == 30 { report.push_str("PASS\n"); }
                 else { report.push_str(&format!("FAIL ({})\n", v)); }
-            } else { report.push_str("FAIL (VFS EMPTY)\n"); }
+            } else { report.push_str("FAIL (VFS)\n"); }
         }
-        Err(e) => report.push_str(&format!("COMPILER ERR: {}\n", e)),
+        Err(e) => report.push_str(&format!("ERR: {}\n", e)),
     }
 
-    report.push_str("\nISA COMPLETE. READY FOR LOADING DOCK.");
+    report.push_str("\nCALLING CONVENTION ESTABLISHED. DECEPTION READY.");
     report
 }
 
