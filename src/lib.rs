@@ -7,7 +7,7 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
 [ ERA 2: TCC BOOTSTRAP ]
-Status: The Deception Layer [LIBC SHIM] Active.
+Status: Deception Layer [CHAR TYPE STRIDES] Active.
 ";
 
 // --- PREPROCESSOR ---
@@ -16,8 +16,6 @@ fn preprocess(src: &str, vfs: &HashMap<String, String>, processed_files: &mut Ve
     let mut result = Vec::new();
     for line in src.lines() {
         let trimmed = line.trim();
-        
-        // Handle #include
         if trimmed.starts_with("#include") {
             let start = trimmed.find(|c| c == '"' || c == '<');
             let end = trimmed.rfind(|c| c == '"' || c == '>');
@@ -35,14 +33,11 @@ fn preprocess(src: &str, vfs: &HashMap<String, String>, processed_files: &mut Ve
             }
             continue;
         }
-
-        // Handle #define
         if trimmed.starts_with("#define") {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             if parts.len() >= 3 { macros.insert(parts[1].to_string(), parts[2..].join(" ")); }
             continue;
         }
-
         let mut processed = line.to_string();
         for (name, val) in &macros { processed = processed.replace(name, val); }
         result.push(processed);
@@ -108,11 +103,12 @@ fn lex(src: &str) -> Vec<Token> {
 enum Expr {
     Number(u64), StringLit(String), Variable(String), Binary(Box<Expr>, Token, Box<Expr>),
     Call(String, Vec<Expr>), Syscall(Vec<Expr>), Deref(Box<Expr>), AddrOf(String),
-    MemberAccess(Box<Expr>, usize), ArrayAccess(Box<Expr>, Box<Expr>, usize),
+    MemberAccess(Box<Expr>, usize), ArrayAccess(Box<Expr>, Box<Expr>, usize), // Stride is last arg
 }
 
-#[derive(Clone)] struct VarInfo { offset: usize, is_array: bool } 
-#[derive(Clone)] struct GlobalInfo { offset: usize, is_array: bool }
+// Added 'stride' to track 1 byte (char) vs 8 bytes (int)
+#[derive(Clone)] struct VarInfo { offset: usize, is_array: bool, stride: usize } 
+#[derive(Clone)] struct GlobalInfo { offset: usize, is_array: bool, stride: usize }
 #[derive(Clone)] struct StructField { offset: usize, size: usize }
 #[derive(Clone)] struct StructDef { size: usize, fields: HashMap<String, StructField> }
 
@@ -170,7 +166,13 @@ impl MiniCC {
                 },
                 Token::LBracket => { 
                     self.consume(); let index = self.parse_expr(); self.consume(); 
-                    left = Expr::ArrayAccess(Box::new(left), Box::new(index), 8); 
+                    // Lookup stride
+                    let mut stride = 8;
+                    if let Expr::Variable(ref name) = left {
+                        if let Some(l) = self.locals.get(name) { stride = l.stride; }
+                        else if let Some(g) = self.globals.get(name) { stride = g.stride; }
+                    }
+                    left = Expr::ArrayAccess(Box::new(left), Box::new(index), stride); 
                 },
                 _ => break,
             } 
@@ -233,11 +235,28 @@ impl MiniCC {
     }
 
     fn compile_global(&mut self) {
-        self.consume(); while self.peek() == Token::Mul { self.consume(); }
+        let type_token = self.consume(); // Int or Char
+        let mut stride = 8;
+        if type_token == Token::Char { stride = 1; }
+        
+        while self.peek() == Token::Mul { self.consume(); stride = 1; } // Pointers are 8 bytes, but point to stride 1 (if char)
+        if type_token == Token::Int { stride = 8; } // Reset stride to 8 for int*
+
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
         let mut size = 8; let mut is_arr = false;
-        if self.peek() == Token::LBracket { self.consume(); if let Token::Num(n) = self.consume() { size = n as usize * 8; } self.consume(); is_arr = true; }
-        self.globals.insert(name, GlobalInfo { offset: self.global_offset, is_array: is_arr }); self.global_offset += size; self.consume();
+        
+        if self.peek() == Token::LBracket { 
+            self.consume(); 
+            if let Token::Num(n) = self.consume() { 
+                size = n as usize * stride; // Size depends on stride!
+            } 
+            self.consume(); 
+            is_arr = true; 
+        }
+        
+        self.globals.insert(name, GlobalInfo { offset: self.global_offset, is_array: is_arr, stride }); 
+        self.global_offset += size; 
+        self.consume();
     }
 
     fn compile_func(&mut self) {
@@ -248,9 +267,14 @@ impl MiniCC {
         let mut param_offsets = Vec::new();
         if self.peek() != Token::RParen { 
             loop { 
-                self.consume(); while self.peek() == Token::Mul { self.consume(); } 
+                let type_token = self.consume();
+                let mut stride = 8;
+                if type_token == Token::Char { stride = 1; }
+                while self.peek() == Token::Mul { self.consume(); stride = 1; } // char* has stride 1
+                if type_token == Token::Int { stride = 8; }
+
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() }; 
-                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_array: false }); 
+                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_array: false, stride }); 
                 param_offsets.push(self.local_offset);
                 self.local_offset += 8; 
                 if self.peek() == Token::Comma { self.consume(); } else { break; } 
@@ -269,11 +293,25 @@ impl MiniCC {
     fn compile_stmt(&mut self) {
         match self.peek() {
             Token::Int | Token::Char | Token::Struct => {
-                let mut sz = 8; let mut is_arr = false; if self.peek() == Token::Struct { self.consume(); self.consume(); } else { self.consume(); }
-                while self.peek() == Token::Mul { self.consume(); }
+                let type_token = self.consume();
+                let mut stride = 8;
+                if type_token == Token::Char { stride = 1; }
+                
+                if type_token == Token::Struct { self.consume(); } 
+                while self.peek() == Token::Mul { self.consume(); stride = 1; } // char* has stride 1
+                if type_token == Token::Int { stride = 8; }
+
                 let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
-                if self.peek() == Token::LBracket { self.consume(); if let Token::Num(n) = self.consume() { sz = n as usize * 8; } self.consume(); is_arr = true; }
-                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_array: is_arr });
+                let mut sz = 8; let mut is_arr = false;
+                
+                if self.peek() == Token::LBracket { 
+                    self.consume(); 
+                    if let Token::Num(n) = self.consume() { sz = n as usize * stride; } 
+                    self.consume(); 
+                    is_arr = true; 
+                }
+                
+                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_array: is_arr, stride });
                 if self.peek() == Token::Assign { self.consume(); let expr = self.parse_expr(); self.gen_expr(expr); self.out.push_str(&format!("LSTORE {}\n", self.local_offset)); }
                 self.local_offset += sz; self.consume();
             }
@@ -299,14 +337,36 @@ impl MiniCC {
             Token::Ident(s) => {
                 self.consume(); let mut lhs = None;
                 if self.peek() == Token::Arrow { self.consume(); let field = if let Token::Ident(f) = self.consume() { f } else { panic!() }; let mut off = 0; for (_, d) in &self.structs { if let Some(f) = d.fields.get(&field) { off = f.offset; break; } } lhs = Some(Expr::MemberAccess(Box::new(Expr::Variable(s.clone())), off)); }
-                else if self.peek() == Token::LBracket { self.consume(); lhs = Some(Expr::ArrayAccess(Box::new(Expr::Variable(s.clone())), Box::new(self.parse_expr()), 8)); self.consume(); }
+                else if self.peek() == Token::LBracket { 
+                    self.consume(); 
+                    let idx = self.parse_expr();
+                    let mut stride = 8;
+                    if let Some(l) = self.locals.get(&s) { stride = l.stride; } else if let Some(g) = self.globals.get(&s) { stride = g.stride; }
+                    lhs = Some(Expr::ArrayAccess(Box::new(Expr::Variable(s.clone())), Box::new(idx), stride)); 
+                    self.consume(); 
+                }
+                
                 if let Some(l) = lhs { 
                     self.consume(); let val = self.parse_expr(); self.gen_expr(val); 
                     match l { 
                         Expr::MemberAccess(_, off) => { if let Some(i) = self.locals.get(&s) { self.out.push_str(&format!("LLOAD {}\n", i.offset)); } else if let Some(i) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\nMLOAD\n", i.offset)); } self.out.push_str(&format!("PUSH {}\nADD\n", off)); }, 
-                        Expr::ArrayAccess(_, idx, strd) => { if let Some(i) = self.locals.get(&s) { if i.is_array { self.out.push_str("GETBP\n"); self.out.push_str(&format!("PUSH {}\nADD\n", i.offset)); } else { self.out.push_str(&format!("LLOAD {}\n", i.offset)); } } else if let Some(i) = self.globals.get(&s) { if i.is_array { self.out.push_str(&format!("PUSH {}\n", i.offset)); } else { self.out.push_str(&format!("PUSH {}\nMLOAD\n", i.offset)); } } self.gen_expr(*idx); self.out.push_str(&format!("PUSH {}\nMUL\nADD\n", strd)); }, _ => {} 
+                        Expr::ArrayAccess(_, idx, strd) => { 
+                            if let Some(i) = self.locals.get(&s) { 
+                                if i.is_array { self.out.push_str("GETBP\n"); self.out.push_str(&format!("PUSH {}\nADD\n", i.offset)); } 
+                                else { self.out.push_str(&format!("LLOAD {}\n", i.offset)); } 
+                            } else if let Some(i) = self.globals.get(&s) { 
+                                if i.is_array { self.out.push_str(&format!("PUSH {}\n", i.offset)); } 
+                                else { self.out.push_str(&format!("PUSH {}\nMLOAD\n", i.offset)); } 
+                            } 
+                            self.gen_expr(*idx); 
+                            self.out.push_str(&format!("PUSH {}\nMUL\nADD\n", strd)); 
+                            if strd == 1 { self.out.push_str("MSTORE8\n"); } else { self.out.push_str("MSTORE\n"); }
+                            return; // Early return because we handled store
+                        }, 
+                        _ => {} 
                     } 
-                    self.out.push_str("MSTORE\n"); self.consume(); 
+                    self.out.push_str("MSTORE\n"); // Fallback for MemberAccess
+                    self.consume(); 
                 }
                 else if self.peek() == Token::Assign { self.consume(); let val = self.parse_expr(); self.gen_expr(val); if let Some(i) = self.locals.get(&s) { self.out.push_str(&format!("LSTORE {}\n", i.offset)); } else if let Some(i) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\nMSTORE\n", i.offset)); } self.consume(); }
                 else if self.peek() == Token::LParen { self.consume(); let mut args = Vec::new(); if self.peek() != Token::RParen { loop { args.push(self.parse_expr()); if self.peek() == Token::Comma { self.consume(); } else { break; } } } self.consume(); self.gen_expr(Expr::Call(s, args)); self.out.push_str("POP\n"); self.consume(); }
@@ -322,7 +382,11 @@ impl MiniCC {
             Expr::StringLit(s) => { let addr = 8192 + self.data.len(); self.data.extend_from_slice(s.as_bytes()); self.data.push(0); self.out.push_str(&format!("PUSH {}\n", addr)); }
             Expr::Variable(s) => { if let Some(i) = self.locals.get(&s) { if i.is_array { self.out.push_str("GETBP\n"); self.out.push_str(&format!("PUSH {}\nADD\n", i.offset)); } else { self.out.push_str(&format!("LLOAD {}\n", i.offset)); } } else if let Some(i) = self.globals.get(&s) { if i.is_array { self.out.push_str(&format!("PUSH {}\n", i.offset)); } else { self.out.push_str(&format!("PUSH {}\nMLOAD\n", i.offset)); } } }
             Expr::MemberAccess(base, off) => { self.gen_expr(*base); self.out.push_str(&format!("PUSH {}\nADD\nMLOAD\n", off)); }
-            Expr::ArrayAccess(base, idx, strd) => { self.gen_expr(*base); self.gen_expr(*idx); self.out.push_str(&format!("PUSH {}\nMUL\nADD\nMLOAD\n", strd)); }
+            Expr::ArrayAccess(base, idx, strd) => { 
+                self.gen_expr(*base); self.gen_expr(*idx); 
+                self.out.push_str(&format!("PUSH {}\nMUL\nADD\n", strd));
+                if strd == 1 { self.out.push_str("MLOAD8\n"); } else { self.out.push_str("MLOAD\n"); }
+            }
             Expr::AddrOf(s) => { if let Some(i) = self.locals.get(&s) { self.out.push_str("GETBP\n"); self.out.push_str(&format!("PUSH {}\nADD\n", i.offset)); } else if let Some(i) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\n", i.offset)); } }
             Expr::Deref(e) => { self.gen_expr(*e); self.out.push_str("MLOAD\n"); }
             Expr::Call(name, args) => { for arg in args { self.gen_expr(arg); } self.out.push_str(&format!("CALL {}\n", name)); }
