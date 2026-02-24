@@ -13,9 +13,9 @@
 - [ ] Achieve full C99 compliance within the VFS.
 
 ### Phase 10: The Deception Layer (POSIX Shim)
+- [x] Implement File Descriptor mapping (VFS -> POSIX).
+- [x] Enable memory heap mapping (`sbrk` syscall).
 - [ ] Implement `stdio.h` / `stdlib.h` against DRE Syscalls.
-- [ ] Implement File Descriptor mapping (VFS -> POSIX).
-- [ ] Enable `malloc/free` heap management within the VM.
 
 ## [UPCOMING] Era 3: The Threshold
 ### Phase 11: The Display Protocol

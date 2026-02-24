@@ -7,7 +7,7 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================
 [ GOLD MASTER STABLE ]
 [ ERA 2: THE INDUSTRIAL BRIDGE ]
-Status: POSIX Shim Initiated. VFS Syscall interface [ONLINE]. The loop is closed.
+Status: POSIX Shim [VFS, SBRK] Online. Heap Memory Initialized. The loop is closed.
 "#;
 
 // --- LEXER ---
@@ -450,13 +450,15 @@ pub struct Machine {
     pub memory: Vec<u8>, pub stack: Vec<u64>, pub call_stack: Vec<(usize, usize)>,
     pub ip: usize, pub bp: usize, pub sp: usize,
     pub vfs: HashMap<String, Vec<u8>>, pub fds: HashMap<u64, (String, usize)>, pub next_fd: u64,
+    pub brk: usize,
 }
 impl Machine {
     pub fn new() -> Self { 
         Self { 
-            memory: vec![0; 16384], stack: vec![], call_stack: vec![], 
+            memory: vec![0; 1024 * 1024], stack: vec![], call_stack: vec![], // 1MB total deterministic memory
             ip: 0, bp: 4096, sp: 4096,
-            vfs: HashMap::new(), fds: HashMap::new(), next_fd: 3 // Reserve 0,1,2 for standard I/O
+            vfs: HashMap::new(), fds: HashMap::new(), next_fd: 3, // Reserve 0,1,2 for standard I/O
+            brk: 512 * 1024 // Heap begins at 512 KB mark
         } 
     }
     pub fn load(&mut self, d: &[u8]) { 
@@ -546,6 +548,13 @@ impl Machine {
                             *pos += len;
                             self.stack.push(len as u64);
                         } else { self.stack.push(0); }
+                    }
+                    4 => { // SBRK: syscall(4, increment) -> old_brk
+                        let inc = self.stack.pop().unwrap() as i64;
+                        let old_brk = self.brk;
+                        if inc > 0 { self.brk += inc as usize; } 
+                        else if inc < 0 { self.brk -= (-inc) as usize; }
+                        self.stack.push(old_brk as u64);
                     }
                     _ => self.stack.push(0), // Unknown Syscall
                 }
@@ -647,6 +656,31 @@ pub fn run_suite() -> String {
     
     if let Some(&ans) = vm2.stack.last() {
         if ans == 72 { report.push_str("PASS\n"); } // 'H' is 72 in ASCII
+        else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
+    } else { report.push_str("FAIL (NO RET)\n"); }
+
+    // --- TEST 3: HEAP SBRK ALLOCATION ---
+    report.push_str("TEST: POSIX_SBRK_ALLOCATION ....... ");
+    let src3 = "
+    int main() {
+        int *ptr1 = syscall(4, 8);
+        *ptr1 = 42;
+        int *ptr2 = syscall(4, 8);
+        *ptr2 = 99;
+        
+        return *ptr1 + *ptr2;
+    }
+    ";
+    let mut cc3 = MiniCC::new(src3);
+    let bin3 = Assembler::compile_bef(&cc3.compile(), &cc3.data);
+    let mut vm3 = Machine::new();
+    vm3.load(&bin3);
+    
+    let mut f3 = 5000;
+    while f3 > 0 && vm3.step().unwrap_or(false) { f3 -= 1; }
+    
+    if let Some(&ans) = vm3.stack.last() {
+        if ans == 141 { report.push_str("PASS\n"); } 
         else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
     } else { report.push_str("FAIL (NO RET)\n"); }
 
