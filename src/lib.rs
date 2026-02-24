@@ -219,7 +219,7 @@ impl MiniCC {
         // Prologue to store args
         let mut sorted_locals: Vec<_> = self.locals.iter().collect();
         sorted_locals.sort_by_key(|(_, v)| v.offset);
-        for _ in sorted_locals {
+        for _ in &sorted_locals {
             // Args are on stack. Store them to local slots.
             // Wait, we need to map them correctly. For simplicty:
             // The compiler pushes args in order. 
@@ -263,7 +263,11 @@ impl MiniCC {
                 self.consume(); // ;
             }
             Token::Return => {
-                self.consume(); self.gen_expr(self.parse_expr()); self.out.push_str("RET\n"); self.consume();
+                self.consume();
+                let expr = self.parse_expr();
+                self.gen_expr(expr);
+                self.out.push_str("RET\n");
+                self.consume();
             }
             Token::While => {
                 self.consume(); self.consume(); // (
