@@ -6,24 +6,20 @@
 - [x] Phase 8: Hardening (Bounds checking & Gas metering).
 - [x] Big Bite 4: Sovereignty Achieved (The loop is closed).
 
-## [CURRENT] Era 2: The Industrial Bridge
-### Phase 9: The Compiler Port (TinyCC)
-- [ ] Implement TCC-to-DRE Backend.
-- [ ] Compile TCC using the Era 1 Bootstrap Compiler.
-- [ ] Achieve full C99 compliance within the VFS.
+## [STABLE] Era 2: The Industrial Bridge
+- [x] Phase 9: TCC Compiler Backend & Self-Hosting.
+- [x] Phase 10: The Deception Layer (POSIX Shim).
+    - File Descriptor VFS mapping.
+    - Sbrk heap mapping.
+    - stdio/stdlib wrappers.
 
-### Phase 10: The Deception Layer (POSIX Shim)
-- [x] Implement File Descriptor mapping (VFS -> POSIX).
-- [x] Enable memory heap mapping (`sbrk` syscall).
-- [ ] Implement `stdio.h` / `stdlib.h` against DRE Syscalls.
-
-## [UPCOMING] Era 3: The Threshold
+## [CURRENT] Era 3: The Threshold
 ### Phase 11: The Display Protocol
 - [ ] Implement VT100/ANSI escape sequence interpretation in the Host Shell.
-- [ ] Map DRE output to a real Terminal Emulator window.
+- [ ] Map `/dev/stdout` VFS output to an interactive frontend UI component.
 
 ### Phase 12: The Earned Terminal
 - [ ] Ingest source code for a stable editor (e.g., `nano`).
 - [ ] Compile `nano` using DRE-native TCC.
-- [ ] Execute `nano` and edit a file within the VFS.
+- [ ] Execute `nano` and edit a file within the VFS interactively.
 - [ ] **Sovereignty Threshold Reached.**

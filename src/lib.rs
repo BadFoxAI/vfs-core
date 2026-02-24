@@ -6,8 +6,8 @@ pub const SYSTEM_STATUS: &str = r#"
 DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================
 [ GOLD MASTER STABLE ]
-[ ERA 2: THE INDUSTRIAL BRIDGE ]
-Status: POSIX Shim [VFS, SBRK] Online. Heap Memory Initialized. The loop is closed.
+[ ERA 3: THE THRESHOLD ]
+Status: POSIX Deception Layer [ONLINE]. Standard Library I/O mapped.
 "#;
 
 // --- LEXER ---
@@ -454,11 +454,16 @@ pub struct Machine {
 }
 impl Machine {
     pub fn new() -> Self { 
+        let mut vfs = HashMap::new();
+        vfs.insert("/dev/stdout".to_string(), Vec::new());
+        let mut fds = HashMap::new();
+        fds.insert(1, ("/dev/stdout".to_string(), 0)); // Map FD 1 to Stdout
+
         Self { 
-            memory: vec![0; 1024 * 1024], stack: vec![], call_stack: vec![], // 1MB total deterministic memory
+            memory: vec![0; 1024 * 1024], stack: vec![], call_stack: vec![],
             ip: 0, bp: 4096, sp: 4096,
-            vfs: HashMap::new(), fds: HashMap::new(), next_fd: 3, // Reserve 0,1,2 for standard I/O
-            brk: 512 * 1024 // Heap begins at 512 KB mark
+            vfs, fds, next_fd: 3,
+            brk: 512 * 1024
         } 
     }
     pub fn load(&mut self, d: &[u8]) { 
@@ -682,6 +687,46 @@ pub fn run_suite() -> String {
     if let Some(&ans) = vm3.stack.last() {
         if ans == 141 { report.push_str("PASS\n"); } 
         else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
+    } else { report.push_str("FAIL (NO RET)\n"); }
+
+    // --- TEST 4: LIBC SHIM (STDIO / STDLIB) ---
+    report.push_str("TEST: LIBC_SHIM_STDIO_STDLIB ...... ");
+    let src4 = "
+    int strlen(char *s) {
+        int len = 0;
+        char *p = s;
+        while (*p) { len = len + 1; p = p + 1; }
+        return len;
+    }
+    int puts(char *s) {
+        return syscall(3, 1, s, strlen(s));
+    }
+    int malloc(int sz) {
+        return syscall(4, sz);
+    }
+    int main() {
+        int *mem = malloc(8);
+        *mem = 42;
+        puts(\"SHIM_OK\");
+        return *mem;
+    }
+    ";
+    let mut cc4 = MiniCC::new(src4);
+    let bin4 = Assembler::compile_bef(&cc4.compile(), &cc4.data);
+    let mut vm4 = Machine::new();
+    vm4.load(&bin4);
+    
+    let mut f4 = 5000;
+    while f4 > 0 && vm4.step().unwrap_or(false) { f4 -= 1; }
+    
+    if let Some(&ans) = vm4.stack.last() {
+        let stdout = vm4.vfs.get("/dev/stdout").unwrap();
+        let stdout_str = String::from_utf8_lossy(stdout);
+        if ans == 42 && stdout_str == "SHIM_OK" { 
+            report.push_str("PASS\n"); 
+        } else { 
+            report.push_str(&format!("FAIL (Ret: {}, Stdout: {})\n", ans, stdout_str)); 
+        }
     } else { report.push_str("FAIL (NO RET)\n"); }
 
     report
