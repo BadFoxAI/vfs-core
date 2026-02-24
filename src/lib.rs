@@ -72,11 +72,32 @@ impl MiniCC {
                 self.heap_offset = curr_ptr + 1;
                 while tokens[i] != ";" { i += 1; }
             } else if tokens[i] == "poke" {
-                i += 2; 
-                let addr = &tokens[i]; i += 2;
+                i += 2; // skip poke (
+                
+                // Parse Addr (handle 'base + offset')
+                let mut addr_expr = Vec::new();
+                while tokens[i] != "," {
+                    addr_expr.push(tokens[i].clone());
+                    i += 1;
+                }
+                i += 1; // skip ,
+
+                // Parse Val
                 let val = &tokens[i];
-                out.push_str(&self.gen_load(addr));
+                
+                // 1. Push Value
                 out.push_str(&self.gen_load(val));
+
+                // 2. Push Address
+                if addr_expr.len() == 1 {
+                    out.push_str(&self.gen_load(&addr_expr[0]));
+                } else if addr_expr.len() == 3 && addr_expr[1] == "+" {
+                    out.push_str(&self.gen_load(&addr_expr[0]));
+                    out.push_str(&self.gen_load(&addr_expr[2]));
+                    out.push_str("ADD\n");
+                }
+
+                // 3. Store
                 out.push_str("STOREB\n");
                 while tokens[i] != ";" { i += 1; }
             } else if tokens[i] == "syscall" {
