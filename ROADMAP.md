@@ -12,7 +12,7 @@
 - [x] Phase 13: Compiler Upgrades (Structs, Arrays, Globals).
 
 ## [UPCOMING] Era 3: The Threshold
-- [ ] **Phase 14: The Multi-Pass Compiler (Forward Declarations).**
+- [x] Phase 14: The Multi-Pass Compiler (Forward Declarations).
 - [ ] **Phase 15: The Preprocessor (Macros/#include).**
 - [ ] Re-attempt Interactive Shell with Industrial Compiler.
 

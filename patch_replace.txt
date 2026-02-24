@@ -1,26 +1,8 @@
-            Expr::ArrayAccess(base, idx, stride) => {
-                // If base is a Variable, and it is an ARRAY, we want its address.
-                // If it is a POINTER, we want its value (address it points to).
-                if let Expr::Variable(name) = *base.clone() {
-                    if let Some(info) = self.locals.get(&name) {
-                        if info.is_array {
-                            self.out.push_str("GETBP\n");
-                            self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
-                        } else {
-                            self.out.push_str(&format!("LLOAD {}\n", info.offset));
-                        }
-                    } else if let Some(&addr) = self.globals.get(&name) {
-                        // Globals are harder to track without Type Map. 
-                        // HACK: If we are doing Array Access on a Global, we assume it's a Label (Address)
-                        // UNLESS it was declared as `int *p`.
-                        // For this test, `arr` is `int arr[10]`. It acts as a label.
-                        // We push the address `addr`.
-                        self.out.push_str(&format!("PUSH {}\n", addr));
-                    }
-                } else {
-                    self.gen_expr(*base);
-                }
-                
-                self.gen_expr(*idx);
-                self.out.push_str(&format!("PUSH {}\nMUL\nADD\nMLOAD\n", stride));
-            }
+pub const SYSTEM_STATUS: &str = "\
+\x1b[36m================================================================================
+DRE // DETERMINISTIC RUNTIME ENVIRONMENT
+================================================================================\x1b[0m
+[ GOLD MASTER STABLE ]
+[ ERA 2: THE INDUSTRIAL BRIDGE ]
+Status: Preprocessor [MACRO EXPANSION] Active.
+";
