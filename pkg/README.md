@@ -26,3 +26,5 @@ The platform is the VFS, the ABI, and the runtime contract. Everything else is s
 
 ## Progress Log
 - **Phase 5.2**: Added  and  opcodes, Call Stack, and  subroutine compilation to the First Mover toolchain.
+
+- **Phase 5.3**: Bootstrapped memory pointers. Added `LOAD` and `STORE` opcodes with `peek` and `poke` semantics.

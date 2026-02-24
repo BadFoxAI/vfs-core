@@ -13,7 +13,8 @@ Host-Independent VFS + Custom ABI + POSIX Shim.
 [~] PHASE 5: BOOTSTRAP TOOLCHAIN (Language v0)
     [x] 5.1 Implement Robust v0 Compiler (Stream Parser).
     [x] 5.2 Implement Function support (CALL/RET).
-    [ ] 5.3 Implement Memory Pointers.
+    [x] 5.3 Implement Memory Pointers (PEEK/POKE).
+    [ ] 5.4 String & Buffer Initialization.
 
 UNIT TEST SUITE:
 "#;
@@ -83,6 +84,21 @@ impl V0Compiler {
                             let fname = &tokens[i+1];
                             out.push_str(&format!("CALL {}\n", fname));
                             while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "poke" {
+                            let ptr = &tokens[i+1];
+                            let val = &tokens[i+2];
+                            out.push_str(&self.gen_load(val));
+                            out.push_str(&self.gen_load(ptr));
+                            out.push_str("STORE\n");
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "peek" {
+                            let dest = &tokens[i+1];
+                            let ptr = &tokens[i+2];
+                            let off = *self.locals.get(dest).unwrap();
+                            out.push_str(&self.gen_load(ptr));
+                            out.push_str("LOAD\n");
+                            out.push_str(&format!("LSTORE {}\n", off));
+                            while tokens[i] != ";" { i += 1; }
                         }
                         i += 1;
                     }
@@ -92,6 +108,23 @@ impl V0Compiler {
                 "call" => {
                     let fname = &tokens[i+1];
                     out.push_str(&format!("CALL {}\n", fname));
+                    while tokens[i] != ";" { i += 1; }
+                }
+                "poke" => {
+                    let ptr = &tokens[i+1];
+                    let val = &tokens[i+2];
+                    out.push_str(&self.gen_load(val));
+                    out.push_str(&self.gen_load(ptr));
+                    out.push_str("STORE\n");
+                    while tokens[i] != ";" { i += 1; }
+                }
+                "peek" => {
+                    let dest = &tokens[i+1];
+                    let ptr = &tokens[i+2];
+                    let off = *self.locals.get(dest).unwrap();
+                    out.push_str(&self.gen_load(ptr));
+                    out.push_str("LOAD\n");
+                    out.push_str(&format!("LSTORE {}\n", off));
                     while tokens[i] != ";" { i += 1; }
                 }
                 "while" => {
@@ -134,6 +167,21 @@ impl V0Compiler {
                         } else if tokens[i] == "call" {
                             let fname = &tokens[i+1];
                             out.push_str(&format!("CALL {}\n", fname));
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "poke" {
+                            let ptr = &tokens[i+1];
+                            let val = &tokens[i+2];
+                            out.push_str(&self.gen_load(val));
+                            out.push_str(&self.gen_load(ptr));
+                            out.push_str("STORE\n");
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "peek" {
+                            let dest = &tokens[i+1];
+                            let ptr = &tokens[i+2];
+                            let off = *self.locals.get(dest).unwrap();
+                            out.push_str(&self.gen_load(ptr));
+                            out.push_str("LOAD\n");
+                            out.push_str(&format!("LSTORE {}\n", off));
                             while tokens[i] != ";" { i += 1; }
                         }
                         i += 1;
@@ -194,6 +242,8 @@ impl Assembler {
                 "JZ" => { code.push(0x41); i+=1; code.extend_from_slice(&(*labels.get(tokens[i]).unwrap() as u64).to_le_bytes()); }
                 "LLOAD" => { code.push(0x60); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
                 "LSTORE" => { code.push(0x61); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
+                "LOAD" => code.push(0x62),
+                "STORE" => code.push(0x63),
                 "CALL" => { code.push(0x80); i+=1; code.extend_from_slice(&(*labels.get(tokens[i]).unwrap() as u64).to_le_bytes()); }
                 "RET" => code.push(0x81),
                 "SYSCALL" => code.push(0xF0),
@@ -252,6 +302,16 @@ impl Machine {
                 let v = self.stack.pop().unwrap();
                 self.memory[self.bp+off..self.bp+off+8].copy_from_slice(&v.to_le_bytes());
             }
+            0x62 => {
+                let addr = self.stack.pop().unwrap() as usize;
+                let val = u64::from_le_bytes(self.memory[addr..addr+8].try_into().unwrap());
+                self.stack.push(val);
+            }
+            0x63 => {
+                let addr = self.stack.pop().unwrap() as usize;
+                let val = self.stack.pop().unwrap();
+                self.memory[addr..addr+8].copy_from_slice(&val.to_le_bytes());
+            }
             0x80 => {
                 let t = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; 
                 self.call_stack.push(self.ip + 8);
@@ -275,10 +335,10 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
-    report.push_str("TEST: V0_FUNCTION_CALLS ... ");
+    report.push_str("TEST: V0_MEMORY_POINTERS ... ");
 
-    // We verify function calls inside loops incrementing the same global variable context
-    let src = "var i = 0 ; fn add_one ( ) { i = i + 1 ; } while ( i < 5 ) { call add_one ; } syscall ( 1 , i ) ; HALT";
+    // We test memory operations by pointing to the absolute end of our 8192-byte RAM layout
+    let src = "var ptr = 8184 ; var val = 42 ; poke ptr val ; var res = 0 ; peek res ptr ; syscall ( 1 , res ) ; HALT";
     let mut v0 = V0Compiler::new();
     let asm = v0.compile(src).unwrap();
     let bin = Assembler::compile_bef(&asm);
@@ -290,7 +350,7 @@ pub fn run_suite() -> String {
 
     if let Some(b) = vm.vfs.get("out.dat") {
         let v = u64::from_le_bytes(b.clone().try_into().unwrap());
-        if v == 5 { report.push_str("PASS\n"); }
+        if v == 42 { report.push_str("PASS\n"); }
         else { report.push_str(&format!("FAIL (Val: {})\n", v)); }
     } else { report.push_str("FAIL (IO)\n"); }
     report
