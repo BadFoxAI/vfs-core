@@ -7,13 +7,13 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================
 [ GOLD MASTER STABLE ]
 [ ERA 2: THE INDUSTRIAL BRIDGE ]
-Status: Industrial TCC Port Full Self-Hosting Compiler Pipeline Active. POSIX Shim Initiated. The loop is closed.
+Status: POSIX Shim Initiated. VFS Syscall interface [ONLINE]. The loop is closed.
 "#;
 
 // --- LEXER ---
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Int, Char, If, Else, While, Return, 
+    Int, Char, If, Else, While, Return, Syscall,
     Ident(String), Num(u64), StrLit(String),
     Plus, Minus, Mul, Div, Assign, Lt, Eq,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
@@ -52,6 +52,7 @@ fn lex(src: &str) -> Vec<Token> {
                     "int" => tokens.push(Token::Int), "char" => tokens.push(Token::Char),
                     "if" => tokens.push(Token::If), "else" => tokens.push(Token::Else),
                     "while" => tokens.push(Token::While), "return" => tokens.push(Token::Return),
+                    "syscall" => tokens.push(Token::Syscall),
                     _ => tokens.push(Token::Ident(s)),
                 }
             }
@@ -76,7 +77,8 @@ fn lex(src: &str) -> Vec<Token> {
 enum Expr {
     Number(u64), StringLit(String), Variable(String),
     Binary(Box<Expr>, Token, Box<Expr>),
-    Call(String, Vec<Expr>), Deref(Box<Expr>), AddrOf(String),
+    Call(String, Vec<Expr>), Syscall(Vec<Expr>), 
+    Deref(Box<Expr>), AddrOf(String),
 }
 
 #[derive(Clone)]
@@ -164,6 +166,18 @@ impl MiniCC {
         match self.consume() {
             Token::Num(n) => Expr::Number(n),
             Token::StrLit(s) => Expr::StringLit(s),
+            Token::Syscall => {
+                if self.consume() != Token::LParen { panic!("Expected '(' after syscall"); }
+                let mut args = Vec::new();
+                if self.peek() != Token::RParen {
+                    loop {
+                        args.push(self.parse_expr());
+                        if self.peek() == Token::Comma { self.consume(); } else { break; }
+                    }
+                }
+                self.consume(); // )
+                Expr::Syscall(args)
+            }
             Token::Ident(s) => {
                 if self.peek() == Token::LParen {
                     self.consume();
@@ -292,6 +306,11 @@ impl MiniCC {
                 self.consume(); // }
                 self.out.push_str(&format!("JMP {}\n{}:\n", l_start, l_end));
             }
+            Token::Syscall => {
+                let expr = self.parse_expr();
+                self.gen_expr(expr);
+                self.consume(); // ;
+            }
             Token::Ident(s) => {
                 self.consume();
                 if self.peek() == Token::Assign {
@@ -360,6 +379,11 @@ impl MiniCC {
                 for arg in args { self.gen_expr(arg); }
                 self.out.push_str(&format!("CALL {}\n", name));
             }
+            Expr::Syscall(args) => {
+                // Reverse to match ABI: top of stack is sys_num, then arg1, arg2...
+                for arg in args.into_iter().rev() { self.gen_expr(arg); }
+                self.out.push_str("SYSCALL\n");
+            }
             Expr::Binary(l, op, r) => {
                 self.gen_expr(*l); self.gen_expr(*r);
                 match op {
@@ -385,7 +409,7 @@ impl Assembler {
             if t.ends_with(':') { labels.insert(t.trim_end_matches(':').to_string(), addr); }
             else { addr += match *t { 
                 "PUSH"|"JMP"|"JZ"|"LLOAD"|"LSTORE"|"CALL" => 9, 
-                "HALT"|"ADD"|"SUB"|"MUL"|"DIV"|"LT"|"RET"|"GETBP"|"MLOAD"|"MSTORE"|"MLOAD8"|"MSTORE8"|"NOT" => 1, 
+                "HALT"|"ADD"|"SUB"|"MUL"|"DIV"|"LT"|"RET"|"GETBP"|"MLOAD"|"MSTORE"|"MLOAD8"|"MSTORE8"|"NOT"|"SYSCALL" => 1, 
                 _ => 0 
             }; }
         }
@@ -406,6 +430,7 @@ impl Assembler {
                 "LSTORE" => { code.push(0x61); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
                 "MLOAD" => code.push(0x62), "MSTORE" => code.push(0x63),
                 "MLOAD8" => code.push(0x70), "MSTORE8" => code.push(0x71),
+                "SYSCALL" => code.push(0x80),
                 _ => {}
             }
             i += 1;
@@ -424,9 +449,16 @@ impl Assembler {
 pub struct Machine {
     pub memory: Vec<u8>, pub stack: Vec<u64>, pub call_stack: Vec<(usize, usize)>,
     pub ip: usize, pub bp: usize, pub sp: usize,
+    pub vfs: HashMap<String, Vec<u8>>, pub fds: HashMap<u64, (String, usize)>, pub next_fd: u64,
 }
 impl Machine {
-    pub fn new() -> Self { Self { memory: vec![0; 16384], stack: vec![], call_stack: vec![], ip: 0, bp: 4096, sp: 4096 } }
+    pub fn new() -> Self { 
+        Self { 
+            memory: vec![0; 16384], stack: vec![], call_stack: vec![], 
+            ip: 0, bp: 4096, sp: 4096,
+            vfs: HashMap::new(), fds: HashMap::new(), next_fd: 3 // Reserve 0,1,2 for standard I/O
+        } 
+    }
     pub fn load(&mut self, d: &[u8]) { 
         let sz = u32::from_le_bytes(d[8..12].try_into().unwrap()) as usize;
         self.memory[0..sz].copy_from_slice(&d[16..16+sz]);
@@ -467,6 +499,57 @@ impl Machine {
             0x63 => { let addr = self.stack.pop().unwrap() as usize; let val = self.stack.pop().unwrap(); self.memory[addr..addr+8].copy_from_slice(&val.to_le_bytes()); }
             0x70 => { let addr = self.stack.pop().unwrap() as usize; self.stack.push(self.memory[addr] as u64); }
             0x71 => { let addr = self.stack.pop().unwrap() as usize; let val = self.stack.pop().unwrap(); self.memory[addr] = val as u8; }
+            0x80 => { // SYSCALL
+                let sys_num = self.stack.pop().unwrap();
+                match sys_num {
+                    1 => { // OPEN: syscall(1, addr) -> fd
+                        let addr = self.stack.pop().unwrap() as usize;
+                        let mut name = String::new();
+                        let mut i = addr;
+                        while i < self.memory.len() && self.memory[i] != 0 { 
+                            name.push(self.memory[i] as char); i += 1; 
+                        }
+                        let fd = self.next_fd; self.next_fd += 1;
+                        if !self.vfs.contains_key(&name) { self.vfs.insert(name.clone(), Vec::new()); }
+                        self.fds.insert(fd, (name, 0));
+                        self.stack.push(fd);
+                    }
+                    2 => { // READ: syscall(2, fd, buf_addr, len) -> bytes_read
+                        let fd = self.stack.pop().unwrap();
+                        let buf = self.stack.pop().unwrap() as usize;
+                        let len = self.stack.pop().unwrap() as usize;
+                        if let Some((name, pos)) = self.fds.get_mut(&fd) {
+                            let file = self.vfs.get(name).unwrap();
+                            let mut read_bytes = 0;
+                            for i in 0..len {
+                                if *pos + i < file.len() && buf + i < self.memory.len() {
+                                    self.memory[buf + i] = file[*pos + i];
+                                    read_bytes += 1;
+                                } else { break; }
+                            }
+                            *pos += read_bytes;
+                            self.stack.push(read_bytes as u64);
+                        } else { self.stack.push(0); }
+                    }
+                    3 => { // WRITE: syscall(3, fd, buf_addr, len) -> bytes_written
+                        let fd = self.stack.pop().unwrap();
+                        let buf = self.stack.pop().unwrap() as usize;
+                        let len = self.stack.pop().unwrap() as usize;
+                        if let Some((name, pos)) = self.fds.get_mut(&fd) {
+                            let file = self.vfs.get_mut(name).unwrap();
+                            for i in 0..len {
+                                if buf + i < self.memory.len() {
+                                    if *pos + i < file.len() { file[*pos + i] = self.memory[buf + i]; }
+                                    else { file.push(self.memory[buf + i]); }
+                                }
+                            }
+                            *pos += len;
+                            self.stack.push(len as u64);
+                        } else { self.stack.push(0); }
+                    }
+                    _ => self.stack.push(0), // Unknown Syscall
+                }
+            }
             _ => return Err("Err".into()),
         }
         Ok(true)
@@ -476,8 +559,9 @@ impl Machine {
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
     
+    // --- TEST 1: COMPILER PIPELINE ---
     report.push_str("TEST: SOVEREIGN_COMPILER_PIPELINE ... ");
-    let src = "
+    let src1 = "
     int main() {
         int *t = 12288;
         *t = 2; t = t + 8; 
@@ -526,16 +610,43 @@ pub fn run_suite() -> String {
     }
     ";
     
-    let mut cc = MiniCC::new(src);
-    let bin = Assembler::compile_bef(&cc.compile(), &cc.data);
-    let mut vm = Machine::new();
-    vm.load(&bin);
+    let mut cc1 = MiniCC::new(src1);
+    let bin1 = Assembler::compile_bef(&cc1.compile(), &cc1.data);
+    let mut vm1 = Machine::new();
+    vm1.load(&bin1);
     
-    let mut f = 20000;
-    while f > 0 && vm.step().unwrap_or(false) { f -= 1; }
+    let mut f1 = 20000;
+    while f1 > 0 && vm1.step().unwrap_or(false) { f1 -= 1; }
     
-    if let Some(&ans) = vm.stack.last() {
+    if let Some(&ans) = vm1.stack.last() {
         if ans == 118 { report.push_str("PASS\n"); }
+        else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
+    } else { report.push_str("FAIL (NO RET)\n"); }
+
+    // --- TEST 2: VFS I/O ROUTINE ---
+    report.push_str("TEST: VFS_SYSCALL_ROUTINE ......... ");
+    let src2 = "
+    int main() {
+        int fd = syscall(1, \"test.txt\");
+        syscall(3, fd, \"HELLO\", 5);
+        
+        int fd2 = syscall(1, \"test.txt\");
+        char *buf = 15000;
+        syscall(2, fd2, buf, 5);
+        
+        return *buf;
+    }
+    ";
+    let mut cc2 = MiniCC::new(src2);
+    let bin2 = Assembler::compile_bef(&cc2.compile(), &cc2.data);
+    let mut vm2 = Machine::new();
+    vm2.load(&bin2);
+    
+    let mut f2 = 5000;
+    while f2 > 0 && vm2.step().unwrap_or(false) { f2 -= 1; }
+    
+    if let Some(&ans) = vm2.stack.last() {
+        if ans == 72 { report.push_str("PASS\n"); } // 'H' is 72 in ASCII
         else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
     } else { report.push_str("FAIL (NO RET)\n"); }
 
