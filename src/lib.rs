@@ -7,7 +7,7 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
 [ ERA 2: THE INDUSTRIAL BRIDGE ]
-Status: Compiler Upgrade [ARRAYS + NESTED STRUCTS] Active.
+Status: Compiler Upgrade [ARRAY POINTER DECAY] Active.
 ";
 
 // --- LEXER ---
@@ -87,7 +87,7 @@ enum Expr {
 }
 
 #[derive(Clone)]
-struct VarInfo { offset: usize, is_global: bool }
+struct VarInfo { offset: usize, is_array: bool, _is_global: bool } // Added is_array
 
 #[derive(Clone)]
 struct StructField { offset: usize, size: usize }
@@ -208,7 +208,7 @@ impl MiniCC {
                     self.consume(); // [
                     let index = self.parse_expr();
                     self.consume(); // ]
-                    left = Expr::ArrayAccess(Box::new(left), Box::new(index), 8); // Assume 8-byte stride for now
+                    left = Expr::ArrayAccess(Box::new(left), Box::new(index), 8); // Assume 8-byte stride
                 },
                 _ => break,
             }
@@ -333,18 +333,12 @@ impl MiniCC {
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
         // Array global?
         let mut size = 8;
-        let mut is_arr = false;
         if self.peek() == Token::LBracket {
             self.consume(); 
             if let Token::Num(n) = self.consume() { size = n as usize * 8; } 
             self.consume();
-            is_arr = true;
         }
-        // Store offset AND array status. We hack the bit into the usize or use a separate map.
-        // For minimal changes, we will assume Global Offset < 1MB. We use high bit for "is_array"?
-        // No, let's keep it simple: If size > 8, it's an array.
-        self.globals.insert(name, self.global_offset); 
-        // We need to track global types. For now, we infer: if using [idx], we treat as ptr.
+        self.globals.insert(name, self.global_offset);
         self.global_offset += size;
         self.consume(); // ;
     }
@@ -362,7 +356,7 @@ impl MiniCC {
             loop {
                 self.consume(); while self.peek() == Token::Mul { self.consume(); }
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() };
-                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_global: false });
+                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_array: false, _is_global: false });
                 self.local_offset += 8;
                 if self.peek() == Token::Comma { self.consume(); } else { break; }
             }
@@ -378,15 +372,17 @@ impl MiniCC {
         match self.peek() {
             Token::Int | Token::Char | Token::Struct => {
                 let mut size = 8;
+                let mut is_arr = false;
                 if self.peek() == Token::Struct { self.consume(); self.consume(); } else { self.consume(); }
                 while self.peek() == Token::Mul { self.consume(); }
                 
                 let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
                 if self.peek() == Token::LBracket {
                     self.consume(); if let Token::Num(n) = self.consume() { size = n as usize * 8; } self.consume();
+                    is_arr = true;
                 }
                 
-                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_global: false });
+                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_array: is_arr, _is_global: false });
                 
                 if self.peek() == Token::Assign {
                     self.consume();
@@ -456,8 +452,7 @@ impl MiniCC {
                     self.consume();
                     let field = if let Token::Ident(f) = self.consume() { f } else { panic!() };
                     
-                    // Base pointer
-                    let mut base = Expr::Variable(s.clone()); // Simplified AST node construction
+                    let base = Expr::Variable(s.clone()); // Simplified AST node construction
                     // Resolve offset
                     let mut found = None;
                     for (_, def) in &self.structs { if let Some(f) = def.fields.get(&field) { found = Some(f.offset); break; } }
@@ -486,11 +481,14 @@ impl MiniCC {
                         Expr::ArrayAccess(_, idx, stride) => {
                             // Arrays are pointers.
                             if let Some(info) = self.locals.get(&s) {
-                                // If it's a local array (stack allocated), its value IS its address? 
-                                // No, for now we treat local arrays as pointers to stack slots.
-                                // We need "address of variable"
-                                self.out.push_str("GETBP\n");
-                                self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
+                                // ARRAY LOGIC FIX: Accessing stack array
+                                if info.is_array {
+                                    self.out.push_str("GETBP\n");
+                                    self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
+                                } else {
+                                    // Pointer
+                                    self.out.push_str(&format!("LLOAD {}\n", info.offset));
+                                }
                             } else if let Some(&addr) = self.globals.get(&s) {
                                 self.out.push_str(&format!("PUSH {}\n", addr));
                             }
@@ -553,8 +551,15 @@ impl MiniCC {
             }
             Expr::Variable(s) => {
                 if let Some(info) = self.locals.get(&s) {
-                    self.out.push_str(&format!("LLOAD {}\n", info.offset));
+                    if info.is_array {
+                        self.out.push_str("GETBP\n");
+                        self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
+                    } else {
+                        self.out.push_str(&format!("LLOAD {}\n", info.offset));
+                    }
                 } else if let Some(&addr) = self.globals.get(&s) {
+                    // Global array/var. For array, we return address (addr). For var, we return value (*addr).
+                    // We need global type info! Hack: assume pointer logic for now.
                     self.out.push_str(&format!("PUSH {}\nMLOAD\n", addr));
                 }
             }
@@ -565,7 +570,7 @@ impl MiniCC {
             Expr::ArrayAccess(base, idx, stride) => {
                 self.gen_expr(*base);
                 self.gen_expr(*idx);
-                self.out.push_str(&format!("PUSH {}\nMUL\nADD\nMLOAD\n", stride));
+                self.out.push_str(&format!("PUSH {}\nMUL\nADD\nMLOAD\n", stride)); 
             }
             Expr::AddrOf(s) => {
                 if let Some(info) = self.locals.get(&s) {
@@ -624,7 +629,7 @@ impl Assembler {
                 "HALT" => code.push(0x00),
                 "PUSH" => { code.push(0x10); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
                 "POP" => code.push(0x11),
-                "ADD" => code.push(0x20), "SUB" => code.push(0x21), "MUL" => code.push(0x22), "NOT" => code.push(0x24), // Added MUL opcode
+                "ADD" => code.push(0x20), "SUB" => code.push(0x21), "MUL" => code.push(0x22), "NOT" => code.push(0x24),
                 "LT" => code.push(0x25), "GT" => code.push(0x26),
                 "JMP" => { code.push(0x30); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
                 "JZ" => { code.push(0x31); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
@@ -687,7 +692,7 @@ impl Machine {
             0x11 => { self.stack.pop(); }
             0x20 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_add(b)); }
             0x21 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_sub(b)); }
-            0x22 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_mul(b)); } // MUL
+            0x22 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_mul(b)); } 
             0x24 => { let a = self.stack.pop().unwrap(); self.stack.push(if a == 0 { 1 } else { 0 }); }
             0x25 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a < b { 1 } else { 0 }); }
             0x26 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a > b { 1 } else { 0 }); }

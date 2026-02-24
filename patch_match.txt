@@ -1,0 +1,5 @@
+            Expr::ArrayAccess(base, idx, stride) => {
+                self.gen_expr(*base);
+                self.gen_expr(*idx);
+                self.out.push_str(&format!("PUSH {}\nMUL\nADD\nMLOAD\n", stride)); // FIX: Explicit MLOAD for R-Value
+            }
