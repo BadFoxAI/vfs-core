@@ -1,13 +1,25 @@
 <!DOCTYPE html>
 <html>
-<head><title>vfs-core</title></head>
-<body style="background: #111; color: #0f0; font-family: monospace; padding: 2rem;">
-    <pre id="term">> Booting...</pre>
+<head><title>DRE Host Shell</title></head>
+<body style="background: #111; color: #ccc; font-family: monospace; padding: 2rem;">
+    <div id="term">Booting DRE Substrate...</div>
     <script type="module">
         import init, { init_shell } from './pkg/vfs_core.js';
         async function run() {
             await init();
-            document.getElementById("term").innerText = init_shell();
+            let raw_output = init_shell();
+            
+            // Phase 11: Host Shell VT100 / ANSI Interpretation
+            let html = raw_output
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                .replace(/\x1B\[31m/g, '<span style="color:#ff5555; font-weight:bold;">') // Red
+                .replace(/\x1B\[32m/g, '<span style="color:#55ff55; font-weight:bold;">') // Green
+                .replace(/\x1B\[33m/g, '<span style="color:#ffff55; font-weight:bold;">') // Yellow
+                .replace(/\x1B\[36m/g, '<span style="color:#55ffff; font-weight:bold;">') // Cyan
+                .replace(/\x1B\[0m/g, '</span>') // Reset
+                .replace(/\n/g, '<br>');
+                
+            document.getElementById("term").innerHTML = html;
         }
         run();
     </script>

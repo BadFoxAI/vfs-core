@@ -1,14 +1,14 @@
 use wasm_bindgen::prelude::*;
 use std::collections::HashMap;
 
-pub const SYSTEM_STATUS: &str = r#"
-================================================================================
+pub const SYSTEM_STATUS: &str = "\
+\x1b[36m================================================================================
 DRE // DETERMINISTIC RUNTIME ENVIRONMENT
-================================================================================
+================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
 [ ERA 3: THE THRESHOLD ]
-Status: POSIX Deception Layer [ONLINE]. Standard Library I/O mapped.
-"#;
+Status: VT100 Display Protocol Active. The Earned Terminal draws near.
+";
 
 // --- LEXER ---
 #[derive(Debug, Clone, PartialEq)]
@@ -39,7 +39,20 @@ fn lex(src: &str) -> Vec<Token> {
                 let mut s = String::new();
                 while let Some(&nc) = chars.peek() {
                     if nc == '"' { chars.next(); break; }
-                    s.push(chars.next().unwrap());
+                    let mut ch = chars.next().unwrap();
+                    if ch == '\\' {
+                        if let Some(&esc) = chars.peek() {
+                            match esc {
+                                'n' => { ch = '\n'; chars.next(); },
+                                'e' => { ch = '\x1B'; chars.next(); }, // Escape for VT100 ANSI
+                                't' => { ch = '\t'; chars.next(); },
+                                '\\' => { ch = '\\'; chars.next(); },
+                                '"' => { ch = '"'; chars.next(); },
+                                _ => {}
+                            }
+                        }
+                    }
+                    s.push(ch);
                 }
                 tokens.push(Token::StrLit(s));
             }
@@ -584,6 +597,7 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
+    let pass_msg = "\x1b[32mPASS\x1b[0m\n";
     
     // --- TEST 1: COMPILER PIPELINE ---
     report.push_str("TEST: SOVEREIGN_COMPILER_PIPELINE ... ");
@@ -645,9 +659,9 @@ pub fn run_suite() -> String {
     while f1 > 0 && vm1.step().unwrap_or(false) { f1 -= 1; }
     
     if let Some(&ans) = vm1.stack.last() {
-        if ans == 118 { report.push_str("PASS\n"); }
-        else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
-    } else { report.push_str("FAIL (NO RET)\n"); }
+        if ans == 118 { report.push_str(pass_msg); }
+        else { report.push_str(&format!("\x1b[31mFAIL (Returned {})\x1b[0m\n", ans)); }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
 
     // --- TEST 2: VFS I/O ROUTINE ---
     report.push_str("TEST: VFS_SYSCALL_ROUTINE ......... ");
@@ -672,9 +686,9 @@ pub fn run_suite() -> String {
     while f2 > 0 && vm2.step().unwrap_or(false) { f2 -= 1; }
     
     if let Some(&ans) = vm2.stack.last() {
-        if ans == 72 { report.push_str("PASS\n"); } // 'H' is 72 in ASCII
-        else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
-    } else { report.push_str("FAIL (NO RET)\n"); }
+        if ans == 72 { report.push_str(pass_msg); } 
+        else { report.push_str(&format!("\x1b[31mFAIL (Returned {})\x1b[0m\n", ans)); }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
 
     // --- TEST 3: HEAP SBRK ALLOCATION ---
     report.push_str("TEST: POSIX_SBRK_ALLOCATION ....... ");
@@ -697,9 +711,9 @@ pub fn run_suite() -> String {
     while f3 > 0 && vm3.step().unwrap_or(false) { f3 -= 1; }
     
     if let Some(&ans) = vm3.stack.last() {
-        if ans == 141 { report.push_str("PASS\n"); } 
-        else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
-    } else { report.push_str("FAIL (NO RET)\n"); }
+        if ans == 141 { report.push_str(pass_msg); } 
+        else { report.push_str(&format!("\x1b[31mFAIL (Returned {})\x1b[0m\n", ans)); }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
 
     // --- TEST 4: LIBC SHIM (STDIO / STDLIB) ---
     report.push_str("TEST: LIBC_SHIM_STDIO_STDLIB ...... ");
@@ -735,11 +749,47 @@ pub fn run_suite() -> String {
         let stdout = vm4.vfs.get("/dev/stdout").unwrap();
         let stdout_str = String::from_utf8_lossy(stdout);
         if ans == 42 && stdout_str == "SHIM_OK" { 
-            report.push_str("PASS\n"); 
+            report.push_str(pass_msg); 
         } else { 
-            report.push_str(&format!("FAIL (Ret: {}, Stdout: {})\n", ans, stdout_str)); 
+            report.push_str(&format!("\x1b[31mFAIL (Ret: {}, Stdout: {})\x1b[0m\n", ans, stdout_str)); 
         }
-    } else { report.push_str("FAIL (NO RET)\n"); }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
+
+    // --- TEST 5: VT100 / ANSI DISPLAY PROTOCOL ---
+    report.push_str("TEST: VT100_DISPLAY_PROTOCOL ...... ");
+    let src5 = "
+    int strlen(char *s) {
+        int len = 0;
+        char *p = s;
+        while (*p) { len = len + 1; p = p + 1; }
+        return len;
+    }
+    int puts(char *s) {
+        return syscall(3, 1, s, strlen(s));
+    }
+    int main() {
+        puts(\"SYSTEM: \\e[32mSOVEREIGN\\e[0m\\n\");
+        return 0;
+    }
+    ";
+    let mut cc5 = MiniCC::new(src5);
+    let bin5 = Assembler::compile_bef(&cc5.compile(), &cc5.data);
+    let mut vm5 = Machine::new();
+    vm5.load(&bin5);
+    
+    let mut f5 = 5000;
+    while f5 > 0 && vm5.step().unwrap_or(false) { f5 -= 1; }
+    
+    if let Some(&ans) = vm5.stack.last() {
+        let stdout = vm5.vfs.get("/dev/stdout").unwrap();
+        let stdout_str = String::from_utf8_lossy(stdout);
+        // Look for the ANSI sequences
+        if ans == 0 && stdout_str.contains("\x1B[32mSOVEREIGN\x1B[0m") { 
+            report.push_str(pass_msg); 
+        } else { 
+            report.push_str(&format!("\x1b[31mFAIL (Ret: {}, Stdout: {:?})\x1b[0m\n", ans, stdout_str)); 
+        }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
 
     report
 }
