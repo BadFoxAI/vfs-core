@@ -58,6 +58,7 @@ impl MiniCC {
                     while tokens[i] != ";" { i += 1; }
                 }
             } else if tokens[i] == "str" {
+                // Expects: str name = val ;
                 let name = &tokens[i+1];
                 let val = &tokens[i+3];
                 self.locals.insert(name.clone(), self.local_offset);
@@ -282,9 +283,8 @@ pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
     report.push_str("TEST: SELF_HOSTING_BOOTSTRAP ... ");
 
-    // CLEAN SOURCE without comments to avoid tokenizer confusion
     let c_src = "
-        str bin payload.bin ;
+        str bin = payload.bin ;
         int buf = 4000 ;
         
         poke ( buf , 231 ) ; poke ( buf + 1 , 17 ) ; poke ( buf + 2 , 177 ) ; poke ( buf + 3 , 0 ) ;
