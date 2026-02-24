@@ -261,9 +261,29 @@ impl MiniCC {
     pub fn compile(&mut self) -> String {
         self.out.push_str("CALL main\nHALT\n");
         
+        // Pass 1: Scan for Structs (Forward Declarations)
+        let saved_pos = self.pos;
+        while self.peek() != Token::EOF {
+            if self.peek() == Token::Struct {
+                self.compile_struct_def();
+            } else {
+                self.consume();
+            }
+        }
+        
+        // Reset for Pass 2: Emit Code
+        self.pos = saved_pos;
         while self.peek() != Token::EOF {
             match self.peek() {
-                Token::Struct => self.compile_struct_def(),
+                Token::Struct => {
+                    // Skip struct definitions in Pass 2, already handled
+                    self.consume(); // struct
+                    self.consume(); // name
+                    self.consume(); // {
+                    while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.consume(); }
+                    self.consume(); // }
+                    self.consume(); // ;
+                },
                 Token::Int | Token::Char => {
                     let mut is_func = false;
                     let mut temp_pos = self.pos + 1; 
@@ -828,6 +848,19 @@ pub fn run_suite() -> String {
     while vm_a.step().unwrap_or(false) {}
     if vm_a.stack.last() == Some(&150) { report.push_str(pass_msg); } 
     else { report.push_str(&format!("\x1b[31mFAIL (Got {:?})\x1b[0m\n", vm_a.stack.last())); }
+
+    // Test 3: Multi-Pass Forward Declarations
+    report.push_str("TEST: MULTIPASS_FORWARD_DECLS ..... ");
+    let src_f = "
+    int main() { return foo(); }
+    int foo() { return 99; }
+    ";
+    let mut cc_f = MiniCC::new(src_f);
+    let mut vm_f = Machine::new();
+    vm_f.load(&Assembler::compile_bef(&cc_f.compile(), &cc_f.data));
+    while vm_f.step().unwrap_or(false) {}
+    if vm_f.stack.last() == Some(&99) { report.push_str(pass_msg); } 
+    else { report.push_str(&format!("\x1b[31mFAIL (Got {:?})\x1b[0m\n", vm_f.stack.last())); }
 
     report
 }
