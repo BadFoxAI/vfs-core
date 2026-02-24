@@ -12,9 +12,11 @@ Host-Independent VFS + Custom ABI + POSIX Shim.
 [x] PHASE 1-4: CORE SYSTEM COMPLETE.
 [x] PHASE 5: BOOTSTRAP TOOLCHAIN COMPLETE.
 [x] PHASE 6: C COMPILER BOOTSTRAP COMPLETE.
-[~] PHASE 7: SELF-HOSTING
+[x] PHASE 7: SELF-HOSTING COMPLETE.
     [x] 7.1 Implement POSIX `exec` (Context Switching).
     [x] 7.2 Simulate Self-Hosting Toolchain (Builder -> Binary -> Exec).
+[~] PHASE 8: FINAL SYSTEM HARDENING
+    [ ] 8.1 Memory Safety & Bounds Checking.
 
 UNIT TEST SUITE:
 "#;
@@ -72,23 +74,15 @@ impl MiniCC {
                 self.heap_offset = curr_ptr + 1;
                 while tokens[i] != ";" { i += 1; }
             } else if tokens[i] == "poke" {
-                i += 2; // skip poke (
-                
-                // Parse Addr (handle 'base + offset')
+                i += 2; 
                 let mut addr_expr = Vec::new();
                 while tokens[i] != "," {
                     addr_expr.push(tokens[i].clone());
                     i += 1;
                 }
-                i += 1; // skip ,
-
-                // Parse Val
+                i += 1; 
                 let val = &tokens[i];
-                
-                // 1. Push Value
                 out.push_str(&self.gen_load(val));
-
-                // 2. Push Address
                 if addr_expr.len() == 1 {
                     out.push_str(&self.gen_load(&addr_expr[0]));
                 } else if addr_expr.len() == 3 && addr_expr[1] == "+" {
@@ -96,8 +90,6 @@ impl MiniCC {
                     out.push_str(&self.gen_load(&addr_expr[2]));
                     out.push_str("ADD\n");
                 }
-
-                // 3. Store
                 out.push_str("STOREB\n");
                 while tokens[i] != ";" { i += 1; }
             } else if tokens[i] == "syscall" {
