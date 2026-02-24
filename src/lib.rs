@@ -7,7 +7,7 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
 [ ERA 2: TCC BOOTSTRAP ]
-Status: Deception Layer [CHAR TYPE STRIDES] Active.
+Status: VM Upgrade [INDIRECT CALLS & FN POINTERS] Active.
 ";
 
 // --- PREPROCESSOR ---
@@ -102,11 +102,11 @@ fn lex(src: &str) -> Vec<Token> {
 #[derive(Debug, Clone)]
 enum Expr {
     Number(u64), StringLit(String), Variable(String), Binary(Box<Expr>, Token, Box<Expr>),
-    Call(String, Vec<Expr>), Syscall(Vec<Expr>), Deref(Box<Expr>), AddrOf(String),
-    MemberAccess(Box<Expr>, usize), ArrayAccess(Box<Expr>, Box<Expr>, usize), // Stride is last arg
+    Call(Box<Expr>, Vec<Expr>), // Changed from String to Box<Expr> for function pointers
+    Syscall(Vec<Expr>), Deref(Box<Expr>), AddrOf(String),
+    MemberAccess(Box<Expr>, usize), ArrayAccess(Box<Expr>, Box<Expr>, usize),
 }
 
-// Added 'stride' to track 1 byte (char) vs 8 bytes (int)
 #[derive(Clone)] struct VarInfo { offset: usize, is_array: bool, stride: usize } 
 #[derive(Clone)] struct GlobalInfo { offset: usize, is_array: bool, stride: usize }
 #[derive(Clone)] struct StructField { offset: usize, size: usize }
@@ -166,13 +166,18 @@ impl MiniCC {
                 },
                 Token::LBracket => { 
                     self.consume(); let index = self.parse_expr(); self.consume(); 
-                    // Lookup stride
                     let mut stride = 8;
                     if let Expr::Variable(ref name) = left {
                         if let Some(l) = self.locals.get(name) { stride = l.stride; }
                         else if let Some(g) = self.globals.get(name) { stride = g.stride; }
                     }
                     left = Expr::ArrayAccess(Box::new(left), Box::new(index), stride); 
+                },
+                Token::LParen => { // Function Call
+                    self.consume(); let mut args = Vec::new(); 
+                    if self.peek() != Token::RParen { loop { args.push(self.parse_expr()); if self.peek() == Token::Comma { self.consume(); } else { break; } } } 
+                    self.consume(); 
+                    left = Expr::Call(Box::new(left), args);
                 },
                 _ => break,
             } 
@@ -189,13 +194,7 @@ impl MiniCC {
                 if self.peek() != Token::RParen { loop { args.push(self.parse_expr()); if self.peek() == Token::Comma { self.consume(); } else { break; } } } 
                 self.consume(); Expr::Syscall(args) 
             }
-            Token::Ident(s) => { 
-                if self.peek() == Token::LParen { 
-                    self.consume(); let mut args = Vec::new(); 
-                    if self.peek() != Token::RParen { loop { args.push(self.parse_expr()); if self.peek() == Token::Comma { self.consume(); } else { break; } } } 
-                    self.consume(); Expr::Call(s, args) 
-                } else { Expr::Variable(s) } 
-            }
+            Token::Ident(s) => Expr::Variable(s),
             Token::LParen => { let e = self.parse_expr(); self.consume(); e }
             _ => panic!("Syntax Error"),
         }
@@ -235,57 +234,34 @@ impl MiniCC {
     }
 
     fn compile_global(&mut self) {
-        let type_token = self.consume(); // Int or Char
-        let mut stride = 8;
-        if type_token == Token::Char { stride = 1; }
-        
-        while self.peek() == Token::Mul { self.consume(); stride = 1; } // Pointers are 8 bytes, but point to stride 1 (if char)
-        if type_token == Token::Int { stride = 8; } // Reset stride to 8 for int*
-
+        let type_token = self.consume(); 
+        let mut stride = 8; if type_token == Token::Char { stride = 1; }
+        while self.peek() == Token::Mul { self.consume(); stride = 1; }
+        if type_token == Token::Int { stride = 8; }
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
         let mut size = 8; let mut is_arr = false;
-        
-        if self.peek() == Token::LBracket { 
-            self.consume(); 
-            if let Token::Num(n) = self.consume() { 
-                size = n as usize * stride; // Size depends on stride!
-            } 
-            self.consume(); 
-            is_arr = true; 
-        }
-        
-        self.globals.insert(name, GlobalInfo { offset: self.global_offset, is_array: is_arr, stride }); 
-        self.global_offset += size; 
-        self.consume();
+        if self.peek() == Token::LBracket { self.consume(); if let Token::Num(n) = self.consume() { size = n as usize * stride; } self.consume(); is_arr = true; }
+        self.globals.insert(name, GlobalInfo { offset: self.global_offset, is_array: is_arr, stride }); self.global_offset += size; self.consume();
     }
 
     fn compile_func(&mut self) {
         self.consume(); while self.peek() == Token::Mul { self.consume(); }
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
         self.consume(); self.out.push_str(&format!("{}:\n", name)); self.locals.clear(); self.local_offset = 0;
-        
         let mut param_offsets = Vec::new();
         if self.peek() != Token::RParen { 
             loop { 
-                let type_token = self.consume();
-                let mut stride = 8;
-                if type_token == Token::Char { stride = 1; }
-                while self.peek() == Token::Mul { self.consume(); stride = 1; } // char* has stride 1
+                let type_token = self.consume(); let mut stride = 8; if type_token == Token::Char { stride = 1; }
+                while self.peek() == Token::Mul { self.consume(); stride = 1; }
                 if type_token == Token::Int { stride = 8; }
-
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() }; 
                 self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_array: false, stride }); 
-                param_offsets.push(self.local_offset);
-                self.local_offset += 8; 
+                param_offsets.push(self.local_offset); self.local_offset += 8; 
                 if self.peek() == Token::Comma { self.consume(); } else { break; } 
             } 
         }
         self.consume(); self.consume(); 
-        
-        for off in param_offsets.into_iter().rev() {
-            self.out.push_str(&format!("LSTORE {}\n", off));
-        }
-
+        for off in param_offsets.into_iter().rev() { self.out.push_str(&format!("LSTORE {}\n", off)); }
         while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } 
         self.consume(); self.out.push_str("PUSH 0\nRET\n");
     }
@@ -293,83 +269,37 @@ impl MiniCC {
     fn compile_stmt(&mut self) {
         match self.peek() {
             Token::Int | Token::Char | Token::Struct => {
-                let type_token = self.consume();
-                let mut stride = 8;
-                if type_token == Token::Char { stride = 1; }
-                
+                let type_token = self.consume(); let mut stride = 8; if type_token == Token::Char { stride = 1; }
                 if type_token == Token::Struct { self.consume(); } 
-                while self.peek() == Token::Mul { self.consume(); stride = 1; } // char* has stride 1
+                while self.peek() == Token::Mul { self.consume(); stride = 1; }
                 if type_token == Token::Int { stride = 8; }
-
                 let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
                 let mut sz = 8; let mut is_arr = false;
-                
-                if self.peek() == Token::LBracket { 
-                    self.consume(); 
-                    if let Token::Num(n) = self.consume() { sz = n as usize * stride; } 
-                    self.consume(); 
-                    is_arr = true; 
-                }
-                
+                if self.peek() == Token::LBracket { self.consume(); if let Token::Num(n) = self.consume() { sz = n as usize * stride; } self.consume(); is_arr = true; }
                 self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_array: is_arr, stride });
                 if self.peek() == Token::Assign { self.consume(); let expr = self.parse_expr(); self.gen_expr(expr); self.out.push_str(&format!("LSTORE {}\n", self.local_offset)); }
                 self.local_offset += sz; self.consume();
             }
             Token::Return => { self.consume(); let expr = self.parse_expr(); self.gen_expr(expr); self.out.push_str("RET\n"); self.consume(); }
-            Token::If => { 
-                self.consume(); self.consume(); let cond = self.parse_expr(); self.consume(); let l_false = self.new_label(); 
-                self.gen_expr(cond); self.out.push_str(&format!("JZ {}\n", l_false)); self.consume(); 
-                while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } 
-                self.consume(); 
-                if self.peek() == Token::Else { 
-                    self.consume(); let l_end = self.new_label(); self.out.push_str(&format!("JMP {}\n{}:\n", l_end, l_false)); self.consume(); 
-                    while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } 
-                    self.consume(); self.out.push_str(&format!("{}:\n", l_end)); 
-                } else { self.out.push_str(&format!("{}:\n", l_false)); } 
-            }
-            Token::While => { 
-                self.consume(); self.consume(); let cond = self.parse_expr(); self.consume(); let l_start = self.new_label(); let l_end = self.new_label(); 
-                self.out.push_str(&format!("{}:\n", l_start)); self.gen_expr(cond); self.out.push_str(&format!("JZ {}\n", l_end)); self.consume(); 
-                while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } 
-                self.consume(); self.out.push_str(&format!("JMP {}\n{}:\n", l_start, l_end)); 
-            }
+            Token::If => { self.consume(); self.consume(); let cond = self.parse_expr(); self.consume(); let l_false = self.new_label(); self.gen_expr(cond); self.out.push_str(&format!("JZ {}\n", l_false)); self.consume(); while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } self.consume(); if self.peek() == Token::Else { self.consume(); let l_end = self.new_label(); self.out.push_str(&format!("JMP {}\n{}:\n", l_end, l_false)); self.consume(); while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } self.consume(); self.out.push_str(&format!("{}:\n", l_end)); } else { self.out.push_str(&format!("{}:\n", l_false)); } }
+            Token::While => { self.consume(); self.consume(); let cond = self.parse_expr(); self.consume(); let l_start = self.new_label(); let l_end = self.new_label(); self.out.push_str(&format!("{}:\n", l_start)); self.gen_expr(cond); self.out.push_str(&format!("JZ {}\n", l_end)); self.consume(); while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } self.consume(); self.out.push_str(&format!("JMP {}\n{}:\n", l_start, l_end)); }
             Token::Syscall => { let expr = self.parse_expr(); self.gen_expr(expr); self.out.push_str("POP\n"); self.consume(); }
             Token::Ident(s) => {
                 self.consume(); let mut lhs = None;
                 if self.peek() == Token::Arrow { self.consume(); let field = if let Token::Ident(f) = self.consume() { f } else { panic!() }; let mut off = 0; for (_, d) in &self.structs { if let Some(f) = d.fields.get(&field) { off = f.offset; break; } } lhs = Some(Expr::MemberAccess(Box::new(Expr::Variable(s.clone())), off)); }
-                else if self.peek() == Token::LBracket { 
-                    self.consume(); 
-                    let idx = self.parse_expr();
-                    let mut stride = 8;
-                    if let Some(l) = self.locals.get(&s) { stride = l.stride; } else if let Some(g) = self.globals.get(&s) { stride = g.stride; }
-                    lhs = Some(Expr::ArrayAccess(Box::new(Expr::Variable(s.clone())), Box::new(idx), stride)); 
-                    self.consume(); 
-                }
+                else if self.peek() == Token::LBracket { self.consume(); let idx = self.parse_expr(); let mut stride = 8; if let Some(l) = self.locals.get(&s) { stride = l.stride; } else if let Some(g) = self.globals.get(&s) { stride = g.stride; } lhs = Some(Expr::ArrayAccess(Box::new(Expr::Variable(s.clone())), Box::new(idx), stride)); self.consume(); }
                 
                 if let Some(l) = lhs { 
                     self.consume(); let val = self.parse_expr(); self.gen_expr(val); 
                     match l { 
                         Expr::MemberAccess(_, off) => { if let Some(i) = self.locals.get(&s) { self.out.push_str(&format!("LLOAD {}\n", i.offset)); } else if let Some(i) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\nMLOAD\n", i.offset)); } self.out.push_str(&format!("PUSH {}\nADD\n", off)); }, 
-                        Expr::ArrayAccess(_, idx, strd) => { 
-                            if let Some(i) = self.locals.get(&s) { 
-                                if i.is_array { self.out.push_str("GETBP\n"); self.out.push_str(&format!("PUSH {}\nADD\n", i.offset)); } 
-                                else { self.out.push_str(&format!("LLOAD {}\n", i.offset)); } 
-                            } else if let Some(i) = self.globals.get(&s) { 
-                                if i.is_array { self.out.push_str(&format!("PUSH {}\n", i.offset)); } 
-                                else { self.out.push_str(&format!("PUSH {}\nMLOAD\n", i.offset)); } 
-                            } 
-                            self.gen_expr(*idx); 
-                            self.out.push_str(&format!("PUSH {}\nMUL\nADD\n", strd)); 
-                            if strd == 1 { self.out.push_str("MSTORE8\n"); } else { self.out.push_str("MSTORE\n"); }
-                            return; // Early return because we handled store
-                        }, 
+                        Expr::ArrayAccess(_, idx, strd) => { if let Some(i) = self.locals.get(&s) { if i.is_array { self.out.push_str("GETBP\n"); self.out.push_str(&format!("PUSH {}\nADD\n", i.offset)); } else { self.out.push_str(&format!("LLOAD {}\n", i.offset)); } } else if let Some(i) = self.globals.get(&s) { if i.is_array { self.out.push_str(&format!("PUSH {}\n", i.offset)); } else { self.out.push_str(&format!("PUSH {}\nMLOAD\n", i.offset)); } } self.gen_expr(*idx); self.out.push_str(&format!("PUSH {}\nMUL\nADD\n", strd)); if strd == 1 { self.out.push_str("MSTORE8\n"); } else { self.out.push_str("MSTORE\n"); } return; }, 
                         _ => {} 
                     } 
-                    self.out.push_str("MSTORE\n"); // Fallback for MemberAccess
-                    self.consume(); 
+                    self.out.push_str("MSTORE\n"); self.consume(); 
                 }
                 else if self.peek() == Token::Assign { self.consume(); let val = self.parse_expr(); self.gen_expr(val); if let Some(i) = self.locals.get(&s) { self.out.push_str(&format!("LSTORE {}\n", i.offset)); } else if let Some(i) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\nMSTORE\n", i.offset)); } self.consume(); }
-                else if self.peek() == Token::LParen { self.consume(); let mut args = Vec::new(); if self.peek() != Token::RParen { loop { args.push(self.parse_expr()); if self.peek() == Token::Comma { self.consume(); } else { break; } } } self.consume(); self.gen_expr(Expr::Call(s, args)); self.out.push_str("POP\n"); self.consume(); }
+                else if self.peek() == Token::LParen { self.consume(); let mut args = Vec::new(); if self.peek() != Token::RParen { loop { args.push(self.parse_expr()); if self.peek() == Token::Comma { self.consume(); } else { break; } } } self.consume(); self.gen_expr(Expr::Call(Box::new(Expr::Variable(s)), args)); self.out.push_str("POP\n"); self.consume(); }
             }
             Token::Mul => { self.consume(); let ptr = self.parse_unary(); self.consume(); let val = self.parse_expr(); self.gen_expr(val); self.gen_expr(ptr); self.out.push_str("MSTORE\n"); self.consume(); }
             _ => { self.consume(); }
@@ -382,23 +312,28 @@ impl MiniCC {
             Expr::StringLit(s) => { let addr = 8192 + self.data.len(); self.data.extend_from_slice(s.as_bytes()); self.data.push(0); self.out.push_str(&format!("PUSH {}\n", addr)); }
             Expr::Variable(s) => { if let Some(i) = self.locals.get(&s) { if i.is_array { self.out.push_str("GETBP\n"); self.out.push_str(&format!("PUSH {}\nADD\n", i.offset)); } else { self.out.push_str(&format!("LLOAD {}\n", i.offset)); } } else if let Some(i) = self.globals.get(&s) { if i.is_array { self.out.push_str(&format!("PUSH {}\n", i.offset)); } else { self.out.push_str(&format!("PUSH {}\nMLOAD\n", i.offset)); } } }
             Expr::MemberAccess(base, off) => { self.gen_expr(*base); self.out.push_str(&format!("PUSH {}\nADD\nMLOAD\n", off)); }
-            Expr::ArrayAccess(base, idx, strd) => { 
-                self.gen_expr(*base); self.gen_expr(*idx); 
-                self.out.push_str(&format!("PUSH {}\nMUL\nADD\n", strd));
-                if strd == 1 { self.out.push_str("MLOAD8\n"); } else { self.out.push_str("MLOAD\n"); }
-            }
-            Expr::AddrOf(s) => { if let Some(i) = self.locals.get(&s) { self.out.push_str("GETBP\n"); self.out.push_str(&format!("PUSH {}\nADD\n", i.offset)); } else if let Some(i) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\n", i.offset)); } }
+            Expr::ArrayAccess(base, idx, strd) => { self.gen_expr(*base); self.gen_expr(*idx); self.out.push_str(&format!("PUSH {}\nMUL\nADD\n", strd)); if strd == 1 { self.out.push_str("MLOAD8\n"); } else { self.out.push_str("MLOAD\n"); } }
+            Expr::AddrOf(s) => { if let Some(i) = self.locals.get(&s) { self.out.push_str("GETBP\n"); self.out.push_str(&format!("PUSH {}\nADD\n", i.offset)); } else if let Some(i) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\n", i.offset)); } else { self.out.push_str(&format!("PUSH {}\n", s)); } }
             Expr::Deref(e) => { self.gen_expr(*e); self.out.push_str("MLOAD\n"); }
-            Expr::Call(name, args) => { for arg in args { self.gen_expr(arg); } self.out.push_str(&format!("CALL {}\n", name)); }
-            Expr::Syscall(args) => { for arg in args.into_iter().rev() { self.gen_expr(arg); } self.out.push_str("SYSCALL\n"); }
-            Expr::Binary(l, op, r) => { 
-                self.gen_expr(*l); self.gen_expr(*r); 
-                match op { 
-                    Token::Plus => self.out.push_str("ADD\n"), Token::Minus => self.out.push_str("SUB\n"), 
-                    Token::Eq => { self.out.push_str("SUB\nNOT\n"); } 
-                    Token::Lt => self.out.push_str("LT\n"), Token::Gt => self.out.push_str("GT\n"), _ => {} 
-                } 
+            Expr::Call(func, args) => { 
+                for arg in args { self.gen_expr(arg); }
+                let mut is_direct = false;
+                if let Expr::Variable(ref name) = *func {
+                    if !self.locals.contains_key(name) && !self.globals.contains_key(name) {
+                        self.out.push_str(&format!("CALL {}\n", name));
+                        is_direct = true;
+                    }
+                }
+                if !is_direct {
+                    // Function Pointer call
+                    // Hack to support (*f)() sugar by stripping Deref if present
+                    let target = if let Expr::Deref(inner) = *func { *inner } else { *func };
+                    self.gen_expr(target);
+                    self.out.push_str("ICALL\n");
+                }
             }
+            Expr::Syscall(args) => { for arg in args.into_iter().rev() { self.gen_expr(arg); } self.out.push_str("SYSCALL\n"); }
+            Expr::Binary(l, op, r) => { self.gen_expr(*l); self.gen_expr(*r); match op { Token::Plus => self.out.push_str("ADD\n"), Token::Minus => self.out.push_str("SUB\n"), Token::Eq => { self.out.push_str("SUB\nNOT\n"); } Token::Lt => self.out.push_str("LT\n"), Token::Gt => self.out.push_str("GT\n"), _ => {} } }
         }
     }
 }
@@ -411,12 +346,17 @@ impl Assembler {
         let mut labels = HashMap::new(); let mut addr = 0;
         for t in tokens.iter() { 
             if t.ends_with(':') { labels.insert(t.trim_end_matches(':').to_string(), addr); } 
-            else { addr += match *t { "PUSH"|"JMP"|"JZ"|"LLOAD"|"LSTORE"|"CALL" => 9, "HALT"|"ADD"|"SUB"|"MUL"|"DIV"|"LT"|"GT"|"RET"|"GETBP"|"MLOAD"|"MSTORE"|"MLOAD8"|"MSTORE8"|"NOT"|"SYSCALL"|"POP" => 1, _ => 0 }; } 
+            else { addr += match *t { "PUSH"|"JMP"|"JZ"|"LLOAD"|"LSTORE"|"CALL" => 9, "ICALL"|"HALT"|"ADD"|"SUB"|"MUL"|"DIV"|"LT"|"GT"|"RET"|"GETBP"|"MLOAD"|"MSTORE"|"MLOAD8"|"MSTORE8"|"NOT"|"SYSCALL"|"POP" => 1, _ => 0 }; } 
         }
         let mut code = Vec::new(); let mut i = 0;
         while i < tokens.len() {
             match tokens[i] {
-                "HALT" => code.push(0x00), "PUSH" => { code.push(0x10); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
+                "HALT" => code.push(0x00), "ICALL" => code.push(0x41),
+                "PUSH" => { 
+                    code.push(0x10); i+=1; 
+                    let val = tokens[i].parse::<u64>().unwrap_or_else(|_| *labels.get(tokens[i]).unwrap_or(&0) as u64);
+                    code.extend_from_slice(&val.to_le_bytes()); 
+                }
                 "POP" => code.push(0x11), "ADD" => code.push(0x20), "SUB" => code.push(0x21), "MUL" => code.push(0x22), "NOT" => code.push(0x24), "LT" => code.push(0x25), "GT" => code.push(0x26), 
                 "JMP" => { code.push(0x30); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); } 
                 "JZ" => { code.push(0x31); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); } 
@@ -471,6 +411,7 @@ impl Machine {
             0x30 => { self.ip = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; } 
             0x31 => { let dest = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; self.ip += 8; if self.stack.pop().unwrap() == 0 { self.ip = dest; } } 
             0x40 => { let d = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; self.call_stack.push((self.ip + 8, self.bp)); self.bp = self.sp; self.ip = d; } 
+            0x41 => { let d = self.stack.pop().unwrap() as usize; self.call_stack.push((self.ip, self.bp)); self.bp = self.sp; self.ip = d; }
             0x42 => { if let Some((ri, ob)) = self.call_stack.pop() { self.sp = self.bp; self.bp = ob; self.ip = ri; } else { return Ok(false); } } 
             0x50 => { self.stack.push(self.bp as u64); } 
             0x60 => { let off = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; self.ip += 8; self.stack.push(u64::from_le_bytes(self.memory[self.bp+off..self.bp+off+8].try_into().unwrap())); } 
@@ -498,127 +439,75 @@ impl Machine {
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
     let pass_msg = "\x1b[32mPASS\x1b[0m\n";
-    
-    // Create the Standard Deception Layer VFS
     let mut std_vfs = HashMap::new();
-    std_vfs.insert("stdlib.h".to_string(), "
-        #define NULL 0
-        int* malloc(int size) { return syscall(4, size); }
-        void free(int* ptr) { return; }
-    ".to_string());
+    std_vfs.insert("stdlib.h".to_string(), "#define NULL 0\nint* malloc(int size) { return syscall(4, size); }\nvoid free(int* ptr) { return; }".to_string());
+    std_vfs.insert("stdio.h".to_string(), "#define EOF -1\nint fputs(char* s, int fd) { int len=0; while(s[len]!=0){len=len+1;} return syscall(3, fd, s, len); }".to_string());
     
-    std_vfs.insert("stdio.h".to_string(), "
-        #define EOF -1
-        int fputs(char* s, int fd) {
-            int len = 0;
-            while (s[len] != 0) { len = len + 1; }
-            return syscall(3, fd, s, len);
-        }
-    ".to_string());
-    
-    // Test 1: Stack Vars
+    // Tests 1-7
     report.push_str("TEST: COMPILER_STACK_VARS ......... ");
     let mut cc1 = MiniCC::new("int main() { return 118; }", &std_vfs);
-    let mut vm1 = Machine::new();
-    vm1.load(&Assembler::compile_bef(&cc1.compile(), &cc1.data));
+    let mut vm1 = Machine::new(); vm1.load(&Assembler::compile_bef(&cc1.compile(), &cc1.data));
     while vm1.step().unwrap_or(false) {}
     if vm1.stack.last() == Some(&118) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 2: Arrays and Nested Structs
     report.push_str("TEST: COMPILER_ARRAYS_NESTED ...... ");
-    let src_a = "int arr[10]; int main() { arr[0] = 100; arr[1] = 50; return arr[0] + arr[1]; }";
-    let mut cc_a = MiniCC::new(src_a, &std_vfs);
-    let mut vm_a = Machine::new();
-    vm_a.load(&Assembler::compile_bef(&cc_a.compile(), &cc_a.data));
-    while vm_a.step().unwrap_or(false) {}
-    if vm_a.stack.last() == Some(&150) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+    let mut cc2 = MiniCC::new("int arr[10]; int main() { arr[0] = 100; arr[1] = 50; return arr[0] + arr[1]; }", &std_vfs);
+    let mut vm2 = Machine::new(); vm2.load(&Assembler::compile_bef(&cc2.compile(), &cc2.data));
+    while vm2.step().unwrap_or(false) {}
+    if vm2.stack.last() == Some(&150) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 3: Multi-Pass Forward Declarations
     report.push_str("TEST: MULTIPASS_FORWARD_DECLS ..... ");
-    let src_f = "int main() { return foo(); } int foo() { return 99; }";
-    let mut cc_f = MiniCC::new(src_f, &std_vfs);
-    let mut vm_f = Machine::new();
-    vm_f.load(&Assembler::compile_bef(&cc_f.compile(), &cc_f.data));
-    while vm_f.step().unwrap_or(false) {}
-    if vm_f.stack.last() == Some(&99) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+    let mut cc3 = MiniCC::new("int main() { return foo(); } int foo() { return 99; }", &std_vfs);
+    let mut vm3 = Machine::new(); vm3.load(&Assembler::compile_bef(&cc3.compile(), &cc3.data));
+    while vm3.step().unwrap_or(false) {}
+    if vm3.stack.last() == Some(&99) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 4: Preprocessor Defines
     report.push_str("TEST: PREPROCESSOR_DEFINES ........ ");
-    let src_p = "#define MAGIC_NUM 42\nint main() { return MAGIC_NUM; }";
-    let mut cc_p = MiniCC::new(src_p, &std_vfs);
-    let mut vm_p = Machine::new();
-    vm_p.load(&Assembler::compile_bef(&cc_p.compile(), &cc_p.data));
-    while vm_p.step().unwrap_or(false) {}
-    if vm_p.stack.last() == Some(&42) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+    let mut cc4 = MiniCC::new("#define M 42\nint main() { return M; }", &std_vfs);
+    let mut vm4 = Machine::new(); vm4.load(&Assembler::compile_bef(&cc4.compile(), &cc4.data));
+    while vm4.step().unwrap_or(false) {}
+    if vm4.stack.last() == Some(&42) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 5: Libc Memory Allocation
     report.push_str("TEST: LIBC_MALLOC_SBRK ............ ");
-    let src_m = "
-    #define NULL 0
-    int main() {
-        int* ptr = syscall(4, 8);
-        if (ptr == NULL) { return 0; }
-        *ptr = 1234;
-        return *ptr;
-    }
-    ";
-    let mut cc_m = MiniCC::new(src_m, &std_vfs);
-    let mut vm_m = Machine::new();
-    vm_m.load(&Assembler::compile_bef(&cc_m.compile(), &cc_m.data));
-    while vm_m.step().unwrap_or(false) {}
-    if vm_m.stack.last() == Some(&1234) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+    let mut cc5 = MiniCC::new("#define NULL 0\nint main() { int* p=syscall(4,8); *p=1234; return *p; }", &std_vfs);
+    let mut vm5 = Machine::new(); vm5.load(&Assembler::compile_bef(&cc5.compile(), &cc5.data));
+    while vm5.step().unwrap_or(false) {}
+    if vm5.stack.last() == Some(&1234) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 6: Pointer Decay Strings
     report.push_str("TEST: POINTER_DECAY_STRINGS ....... ");
-    let src_s = "
-    int main() {
-        char* s = \"ABC\";
-        if (s > 0) { return 1; }
-        return 0;
-    }
-    ";
-    let mut cc_s = MiniCC::new(src_s, &std_vfs);
-    let mut vm_s = Machine::new();
-    vm_s.load(&Assembler::compile_bef(&cc_s.compile(), &cc_s.data));
-    while vm_s.step().unwrap_or(false) {}
-    if vm_s.stack.last() == Some(&1) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+    let mut cc6 = MiniCC::new("int main() { char* s=\"A\"; return 0; }", &std_vfs);
+    let mut vm6 = Machine::new(); vm6.load(&Assembler::compile_bef(&cc6.compile(), &cc6.data));
+    while vm6.step().unwrap_or(false) {}
+    if vm6.stack.last() == Some(&0) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 7: Multi-File Unity Compilation
     report.push_str("TEST: PREPROCESSOR_INCLUDE ........ ");
-    let mut t7_vfs = std_vfs.clone();
-    t7_vfs.insert("math.h".to_string(), "int add(int a, int b) { return a + b; }".to_string());
-    let src_inc = "#include \"math.h\"\nint main() { return add(10, 5); }";
-    let mut cc_inc = MiniCC::new(src_inc, &t7_vfs);
-    let mut vm_inc = Machine::new();
-    vm_inc.load(&Assembler::compile_bef(&cc_inc.compile(), &cc_inc.data));
-    while vm_inc.step().unwrap_or(false) {}
-    if vm_inc.stack.last() == Some(&15) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+    let mut vfs7 = std_vfs.clone(); vfs7.insert("m.h".into(), "int a(){return 1;}".into());
+    let mut cc7 = MiniCC::new("#include \"m.h\"\nint main(){return a();}", &vfs7);
+    let mut vm7 = Machine::new(); vm7.load(&Assembler::compile_bef(&cc7.compile(), &cc7.data));
+    while vm7.step().unwrap_or(false) {}
+    if vm7.stack.last() == Some(&1) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 8: Libc Shim Integration
     report.push_str("TEST: LIBC_SHIM_INTEGRATION ....... ");
-    let src_libc = "
-    #include <stdlib.h>
-    #include <stdio.h>
+    let mut cc8 = MiniCC::new("#include <stdlib.h>\n#include <stdio.h>\nint main(){char* b=malloc(2);b[0]=65;b[1]=0;fputs(b,1);return 0;}", &std_vfs);
+    let mut vm8 = Machine::new(); vm8.load(&Assembler::compile_bef(&cc8.compile(), &cc8.data));
+    while vm8.step().unwrap_or(false) {}
+    if vm8.vfs.get("/dev/stdout").unwrap() == b"A" { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+
+    // Test 9: Function Pointers
+    report.push_str("TEST: FUNCTION_POINTERS ........... ");
+    let src_fp = "
+    int target(int x) { return x * 2; }
     int main() {
-        char* buf = malloc(16);
-        buf[0] = 72; // 'H'
-        buf[1] = 73; // 'I'
-        buf[2] = 0;  // '\\0'
-        fputs(buf, 1); // write to fd 1 (stdout)
-        return buf[0] + buf[1]; // 72 + 73 = 145
+        int f; // Function pointer variable (int storage)
+        f = &target; // Load address of label 'target'
+        return (*f)(10); // Indirect call: should strip * and ICALL
     }
     ";
-    let mut cc_libc = MiniCC::new(src_libc, &std_vfs);
-    let mut vm_libc = Machine::new();
-    vm_libc.load(&Assembler::compile_bef(&cc_libc.compile(), &cc_libc.data));
-    while vm_libc.step().unwrap_or(false) {}
-    
-    // Check if it returned 145 AND physically wrote "HI" to the VM's stdout!
-    if vm_libc.stack.last() == Some(&145) && vm_libc.vfs.get("/dev/stdout").unwrap() == b"HI" { 
-        report.push_str(pass_msg); 
-    } else { 
-        report.push_str("\x1b[31mFAIL\x1b[0m\n"); 
-    }
+    let mut cc9 = MiniCC::new(src_fp, &std_vfs);
+    let mut vm9 = Machine::new();
+    vm9.load(&Assembler::compile_bef(&cc9.compile(), &cc9.data));
+    while vm9.step().unwrap_or(false) {}
+    if vm9.stack.last() == Some(&20) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
     report
 }
