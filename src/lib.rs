@@ -7,7 +7,7 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
 [ ERA 2: TCC BOOTSTRAP ]
-Status: VM Upgrade [INDIRECT CALLS & FN POINTERS] Active.
+Status: VM Upgrade [INDIRECT CALLS FIXED] Active.
 ";
 
 // --- PREPROCESSOR ---
@@ -102,7 +102,7 @@ fn lex(src: &str) -> Vec<Token> {
 #[derive(Debug, Clone)]
 enum Expr {
     Number(u64), StringLit(String), Variable(String), Binary(Box<Expr>, Token, Box<Expr>),
-    Call(Box<Expr>, Vec<Expr>), // Changed from String to Box<Expr> for function pointers
+    Call(Box<Expr>, Vec<Expr>), 
     Syscall(Vec<Expr>), Deref(Box<Expr>), AddrOf(String),
     MemberAccess(Box<Expr>, usize), ArrayAccess(Box<Expr>, Box<Expr>, usize),
 }
@@ -173,7 +173,7 @@ impl MiniCC {
                     }
                     left = Expr::ArrayAccess(Box::new(left), Box::new(index), stride); 
                 },
-                Token::LParen => { // Function Call
+                Token::LParen => { 
                     self.consume(); let mut args = Vec::new(); 
                     if self.peek() != Token::RParen { loop { args.push(self.parse_expr()); if self.peek() == Token::Comma { self.consume(); } else { break; } } } 
                     self.consume(); 
@@ -284,6 +284,7 @@ impl MiniCC {
             Token::If => { self.consume(); self.consume(); let cond = self.parse_expr(); self.consume(); let l_false = self.new_label(); self.gen_expr(cond); self.out.push_str(&format!("JZ {}\n", l_false)); self.consume(); while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } self.consume(); if self.peek() == Token::Else { self.consume(); let l_end = self.new_label(); self.out.push_str(&format!("JMP {}\n{}:\n", l_end, l_false)); self.consume(); while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } self.consume(); self.out.push_str(&format!("{}:\n", l_end)); } else { self.out.push_str(&format!("{}:\n", l_false)); } }
             Token::While => { self.consume(); self.consume(); let cond = self.parse_expr(); self.consume(); let l_start = self.new_label(); let l_end = self.new_label(); self.out.push_str(&format!("{}:\n", l_start)); self.gen_expr(cond); self.out.push_str(&format!("JZ {}\n", l_end)); self.consume(); while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } self.consume(); self.out.push_str(&format!("JMP {}\n{}:\n", l_start, l_end)); }
             Token::Syscall => { let expr = self.parse_expr(); self.gen_expr(expr); self.out.push_str("POP\n"); self.consume(); }
+            // Handles: Identifier assignments, direct calls, array access assignments
             Token::Ident(s) => {
                 self.consume(); let mut lhs = None;
                 if self.peek() == Token::Arrow { self.consume(); let field = if let Token::Ident(f) = self.consume() { f } else { panic!() }; let mut off = 0; for (_, d) in &self.structs { if let Some(f) = d.fields.get(&field) { off = f.offset; break; } } lhs = Some(Expr::MemberAccess(Box::new(Expr::Variable(s.clone())), off)); }
@@ -299,9 +300,47 @@ impl MiniCC {
                     self.out.push_str("MSTORE\n"); self.consume(); 
                 }
                 else if self.peek() == Token::Assign { self.consume(); let val = self.parse_expr(); self.gen_expr(val); if let Some(i) = self.locals.get(&s) { self.out.push_str(&format!("LSTORE {}\n", i.offset)); } else if let Some(i) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\nMSTORE\n", i.offset)); } self.consume(); }
-                else if self.peek() == Token::LParen { self.consume(); let mut args = Vec::new(); if self.peek() != Token::RParen { loop { args.push(self.parse_expr()); if self.peek() == Token::Comma { self.consume(); } else { break; } } } self.consume(); self.gen_expr(Expr::Call(Box::new(Expr::Variable(s)), args)); self.out.push_str("POP\n"); self.consume(); }
+                // Handle Expression Statements starting with Ident (like calls)
+                else { 
+                    // Backtrack the Ident consumption effectively by reconstructing the expression
+                    // We already consumed `s`. We need to parse the rest of the expression.
+                    // This is tricky. Easiest way is to parse_postfix starting from Variable(s)
+                    // But parse_postfix calls parse_primary.
+                    // Let's implement a helper or inline it.
+                    let mut left = Expr::Variable(s);
+                    // Inline parse_postfix logic
+                    loop {
+                        match self.peek() {
+                            Token::Arrow => { self.consume(); if let Token::Ident(field) = self.consume() { let mut found_offset = None; for (_, def) in &self.structs { if let Some(f) = def.fields.get(&field) { found_offset = Some(f.offset); break; } } if let Some(off) = found_offset { left = Expr::MemberAccess(Box::new(left), off); } } },
+                            Token::LBracket => { self.consume(); let index = self.parse_expr(); left = Expr::ArrayAccess(Box::new(left), Box::new(index), 8); self.consume(); },
+                            Token::LParen => { self.consume(); let mut args = Vec::new(); if self.peek() != Token::RParen { loop { args.push(self.parse_expr()); if self.peek() == Token::Comma { self.consume(); } else { break; } } } self.consume(); left = Expr::Call(Box::new(left), args); },
+                            _ => break,
+                        }
+                    }
+                    self.gen_expr(left); 
+                    self.out.push_str("POP\n");
+                    self.consume(); // Semicolon
+                }
             }
-            Token::Mul => { self.consume(); let ptr = self.parse_unary(); self.consume(); let val = self.parse_expr(); self.gen_expr(val); self.gen_expr(ptr); self.out.push_str("MSTORE\n"); self.consume(); }
+            // Dereference Assignment (*p = 10) OR Expression Statement (*p)
+            Token::Mul => { 
+                self.consume(); let ptr = self.parse_unary(); 
+                if self.peek() == Token::Assign {
+                    self.consume(); let val = self.parse_expr(); self.gen_expr(val); self.gen_expr(ptr); self.out.push_str("MSTORE\n"); self.consume(); 
+                } else {
+                    // Expression statement starting with * (e.g. *p;)
+                    self.gen_expr(Expr::Deref(Box::new(ptr)));
+                    self.out.push_str("POP\n");
+                    self.consume(); 
+                }
+            }
+            // Parenthesized Expression Statement: (*f)(10);
+            Token::LParen => {
+                let expr = self.parse_expr();
+                self.gen_expr(expr);
+                self.out.push_str("POP\n");
+                self.consume(); // Semicolon
+            }
             _ => { self.consume(); }
         }
     }
@@ -325,8 +364,6 @@ impl MiniCC {
                     }
                 }
                 if !is_direct {
-                    // Function Pointer call
-                    // Hack to support (*f)() sugar by stripping Deref if present
                     let target = if let Expr::Deref(inner) = *func { *inner } else { *func };
                     self.gen_expr(target);
                     self.out.push_str("ICALL\n");
@@ -498,9 +535,9 @@ pub fn run_suite() -> String {
     let src_fp = "
     int target(int x) { return x * 2; }
     int main() {
-        int f; // Function pointer variable (int storage)
-        f = &target; // Load address of label 'target'
-        return (*f)(10); // Indirect call: should strip * and ICALL
+        int f; 
+        f = &target; 
+        return (*f)(10); 
     }
     ";
     let mut cc9 = MiniCC::new(src_fp, &std_vfs);
