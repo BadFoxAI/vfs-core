@@ -612,6 +612,7 @@ impl DREInstance {
     #[wasm_bindgen(constructor)]
     pub fn new() -> DREInstance {
         // Here we inject an actual interactive operating shell and nano-clone written in C!
+        // We use nested if/else statements instead of || or && because MiniCC is strictly C-subset.
         let src = "
         int strlen(char *s) {
             int len = 0; char *p = s;
@@ -619,9 +620,11 @@ impl DREInstance {
             return len;
         }
         int puts(char *s) { return syscall(3, 1, s, strlen(s)); }
+        
         int streq(char *a, char *b) {
             while (*a) {
-                if (*a - *b) { return 0; }
+                int diff = *a - *b;
+                if (diff) { return 0; }
                 a = a + 1; b = b + 1;
             }
             if (*b) { return 0; }
@@ -642,38 +645,52 @@ impl DREInstance {
             while (1) {
                 n = syscall(2, fd_in, buf, 1);
                 if (n > 0) {
-                    if (*buf == 13 || *buf == 10) {
+                    int is_enter = 0;
+                    if (*buf == 13) { is_enter = 1; }
+                    if (*buf == 10) { is_enter = 1; }
+
+                    int is_bs = 0;
+                    if (*buf == 8) { is_bs = 1; }
+                    if (*buf == 127) { is_bs = 1; }
+
+                    if (is_enter) {
                         puts(\"\\n\");
                         char *cur = line + pos; *cur = 0;
                         
                         if (streq(line, \"help\")) {
-                            puts(\"Commands:\\n  \\e[33mhelp\\e[0m  - Show this menu\\n  \\e[33mclear\\e[0m - Clear screen\\n  \\e[33medit\\e[0m  - Open VFS Text Editor\\n  \\e[33mread\\e[0m  - Read 'test.txt' from VFS\\n\");
+                            puts(\"Commands:\\n  \\e[33mhelp\\e[0m  - Show this menu\\n  \\e[33mclear\\e[0m - Clear screen\\n  \\e[33medit\\e[0m  - Open VFS Editor\\n  \\e[33mread\\e[0m  - Read 'test.txt'\\n\");
                         } else if (streq(line, \"clear\")) {
                             puts(\"\\e[2J\\e[H\");
                         } else if (streq(line, \"edit\")) {
-                            // --- DRE NANO-LITE EDITOR ---
-                            puts(\"\\e[2J\\e[H\\e[7m DRE VFS EDITOR (Press ESC to save to 'test.txt' and exit) \\e[0m\\n\");
+                            puts(\"\\e[2J\\e[H\\e[7m DRE VFS EDITOR (Press ESC to save to 'test.txt') \\e[0m\\n\");
                             char *fbuf = 20000;
                             int fpos = 0;
-                            while (1) {
+                            int editing = 1;
+                            while (editing) {
                                 n = syscall(2, fd_in, buf, 1);
                                 if (n > 0) {
-                                    if (*buf == 27) { // ESC
+                                    if (*buf == 27) { 
                                         int fd = syscall(1, \"test.txt\");
                                         syscall(3, fd, fbuf, fpos);
-                                        puts(\"\\e[2J\\e[H\\e[32m[ File successfully saved to VFS 'test.txt' ]\\e[0m\\n\");
-                                        break;
-                                    } else if (*buf == 8 || *buf == 127) { // Backspace
-                                        if (fpos > 0) {
-                                            puts(\"\\b \\b\");
-                                            fpos = fpos - 1;
+                                        puts(\"\\n\\e[32m[ Saved to VFS 'test.txt' ]\\e[0m\\n\");
+                                        editing = 0;
+                                    } else {
+                                        int b_bs = 0;
+                                        if (*buf == 8) { b_bs = 1; }
+                                        if (*buf == 127) { b_bs = 1; }
+                                        
+                                        if (b_bs) {
+                                            if (fpos > 0) {
+                                                puts(\"\\b \\b\");
+                                                fpos = fpos - 1;
+                                            }
+                                        } else if (*buf == 13) {
+                                            puts(\"\\n\");
+                                            char *fcur = fbuf + fpos; *fcur = 10; fpos = fpos + 1;
+                                        } else {
+                                            syscall(3, fd_out, buf, 1);
+                                            char *fcur = fbuf + fpos; *fcur = *buf; fpos = fpos + 1;
                                         }
-                                    } else if (*buf == 13) { // Enter
-                                        puts(\"\\n\");
-                                        char *fcur = fbuf + fpos; *fcur = 10; fpos = fpos + 1;
-                                    } else { // Typable char
-                                        syscall(3, fd_out, buf, 1);
-                                        char *fcur = fbuf + fpos; *fcur = *buf; fpos = fpos + 1;
                                     }
                                 }
                             }
@@ -685,10 +702,9 @@ impl DREInstance {
                                 puts(\"\\e[36m--- test.txt ---\\e[0m\\n\");
                                 char *end = rbuf + bytes; *end = 0;
                                 puts(rbuf);
-                                if (*(end - 1) - 10) { puts(\"\\n\"); } 
-                                puts(\"\\e[36m----------------\\e[0m\\n\");
+                                puts(\"\\n\\e[36m----------------\\e[0m\\n\");
                             } else {
-                                puts(\"\\e[31mFile 'test.txt' is empty or missing.\\e[0m\\n\");
+                                puts(\"\\e[31mFile 'test.txt' is empty.\\e[0m\\n\");
                             }
                         } else {
                             if (pos > 0) {
@@ -697,7 +713,7 @@ impl DREInstance {
                         }
                         pos = 0;
                         puts(\"> \");
-                    } else if (*buf == 8 || *buf == 127) {
+                    } else if (is_bs) {
                         if (pos > 0) { puts(\"\\b \\b\"); pos = pos - 1; }
                     } else {
                         syscall(3, fd_out, buf, 1);
@@ -739,7 +755,38 @@ impl DREInstance {
     }
 }
 
-pub fn run_suite() -> String { String::from(SYSTEM_STATUS) }
+// Restore Automated Test Suite for CLI
+pub fn run_suite() -> String {
+    let mut report = String::from(SYSTEM_STATUS);
+    let pass_msg = "\x1b[32mPASS\x1b[0m\n";
+    
+    report.push_str("TEST: SOVEREIGN_COMPILER_PIPELINE ... ");
+    let src1 = "int main() { return 118; }";
+    let mut cc1 = MiniCC::new(src1);
+    let mut vm1 = Machine::new();
+    vm1.load(&Assembler::compile_bef(&cc1.compile(), &cc1.data));
+    while vm1.step().unwrap_or(false) {}
+    if vm1.stack.last() == Some(&118) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+
+    report.push_str("TEST: VFS_SYSCALL_ROUTINE ......... ");
+    let src2 = "int main() { int fd=syscall(1,\"t\"); syscall(3,fd,\"A\",1); int fd2=syscall(1,\"t\"); char *b=1000; syscall(2,fd2,b,1); return *b; }";
+    let mut cc2 = MiniCC::new(src2);
+    let mut vm2 = Machine::new();
+    vm2.load(&Assembler::compile_bef(&cc2.compile(), &cc2.data));
+    while vm2.step().unwrap_or(false) {}
+    if vm2.stack.last() == Some(&65) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+
+    report.push_str("TEST: POSIX_SBRK_ALLOCATION ....... ");
+    let src3 = "int main() { int *p=syscall(4,8); *p=42; return *p; }";
+    let mut cc3 = MiniCC::new(src3);
+    let mut vm3 = Machine::new();
+    vm3.load(&Assembler::compile_bef(&cc3.compile(), &cc3.data));
+    while vm3.step().unwrap_or(false) {}
+    if vm3.stack.last() == Some(&42) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+    
+    report.push_str("\n\x1b[32m[ UI READY ]\x1b[0m Navigate to the Web Interface to open the Interactive Session.\n");
+    report
+}
 
 #[wasm_bindgen]
 pub fn init_shell() -> String { run_suite() }
