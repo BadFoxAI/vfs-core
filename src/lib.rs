@@ -45,7 +45,7 @@ impl MiniCC {
         let mut i = 0;
         while i < tokens.len() {
             if tokens[i] == "#include" {
-                i += 2; // skip header
+                i += 2; 
             } else if tokens[i] == "int" && i + 1 < tokens.len() {
                 if tokens[i+1] == "main" {
                     i += 2; while tokens[i] != "{" { i += 1; }
@@ -58,7 +58,6 @@ impl MiniCC {
                     while tokens[i] != ";" { i += 1; }
                 }
             } else if tokens[i] == "str" {
-                // Expects: str name = val ;
                 let name = &tokens[i+1];
                 let val = &tokens[i+3];
                 self.locals.insert(name.clone(), self.local_offset);
@@ -318,17 +317,30 @@ pub fn run_suite() -> String {
     let mut vm = Machine::new();
     vm.load(&bin);
     
-    let mut fuel = 2000;
-    while fuel > 0 && vm.step().unwrap_or(false) { fuel -= 1; }
+    let mut fuel = 10000;
+    let mut error: Option<String> = None;
+    while fuel > 0 {
+        match vm.step() {
+            Ok(running) => if !running { break; },
+            Err(e) => { error = Some(e); break; }
+        }
+        fuel -= 1;
+    }
 
-    if let Some(b) = vm.vfs.get("stdout.txt") {
+    if let Some(e) = error {
+        report.push_str(&format!("FAIL (Runtime Error: {})\n", e));
+    } else if let Some(b) = vm.vfs.get("stdout.txt") {
         if b.len() == 1 && b[0] == 90 { 
             report.push_str("PASS\n"); 
         } else { 
             report.push_str(&format!("FAIL (Val: {:?})\n", b)); 
         }
     } else { 
-        report.push_str("FAIL (IO)\n"); 
+        if let Some(ret) = vm.vfs.get("out.dat") {
+             report.push_str(&format!("FAIL (Fell Through to Return: {:?})\n", ret));
+        } else {
+             report.push_str("FAIL (IO - No Output)\n");
+        }
     }
     report
 }
