@@ -39,3 +39,6 @@ The platform is the VFS, the ABI, and the runtime contract. Everything else is s
 - **Phase 6.2**: Implemented the POSIX CRT emulation layer. Mapped `<stdio.h>` functions like `putchar` to VM Syscall 4 (STDOUT), enabling standard C I/O.
 
 - **Branding Update**: System renamed to DRE (Deterministic Runtime Environment).
+
+## Phase 7: Self-Hosting
+- **Phase 7.1**: Implemented Syscall 5 (`EXEC`). The DRE can now read ABI binaries from the Virtual File System, clear its own memory, and context-switch to execute the new payload natively.

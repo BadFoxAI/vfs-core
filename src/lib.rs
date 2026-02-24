@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub const SYSTEM_STATUS: &str = r#"
 ================================================================================
@@ -11,11 +11,10 @@ Host-Independent VFS + Custom ABI + POSIX Shim.
 [ BUILD LOG ]
 [x] PHASE 1-4: CORE SYSTEM COMPLETE.
 [x] PHASE 5: BOOTSTRAP TOOLCHAIN COMPLETE.
-[x] PHASE 6: C COMPILER BOOTSTRAP
-    [x] 6.1 Implement C-to-ABI Frontend (MiniCC).
-    [x] 6.2 Implement POSIX CRT (C Runtime) Headers.
+[x] PHASE 6: C COMPILER BOOTSTRAP COMPLETE.
 [~] PHASE 7: SELF-HOSTING
-    [ ] 7.1 Compile LLVM/Clang strictly in VFS.
+    [x] 7.1 Implement POSIX `exec` (Context Switching).
+    [ ] 7.2 Compile LLVM/Clang strictly in VFS.
 
 UNIT TEST SUITE:
 "#;
@@ -24,11 +23,12 @@ UNIT TEST SUITE:
 pub struct MiniCC {
     locals: HashMap<String, usize>,
     local_offset: usize,
+    heap_offset: usize,
 }
 
 impl MiniCC {
     pub fn new() -> Self {
-        Self { locals: HashMap::new(), local_offset: 0 }
+        Self { locals: HashMap::new(), local_offset: 0, heap_offset: 2048 }
     }
 
     pub fn compile(&mut self, source: &str) -> Result<String, String> {
@@ -45,13 +45,12 @@ impl MiniCC {
         let mut i = 0;
         while i < tokens.len() {
             if tokens[i] == "#include" {
-                i += 2; // skip #include <stdio.h>
+                i += 2; // skip #include <stdio.h> / <unistd.h>
             } else if tokens[i] == "int" && i + 1 < tokens.len() {
                 if tokens[i+1] == "main" {
                     i += 2; // skip int main
                     while tokens[i] != "{" { i += 1; } // skip ( )
                 } else {
-                    // int a = 100 ;
                     let name = &tokens[i+1];
                     let val = &tokens[i+3];
                     self.locals.insert(name.clone(), self.local_offset);
@@ -60,28 +59,41 @@ impl MiniCC {
                     while tokens[i] != ";" { i += 1; }
                 }
             } else if tokens[i] == "putchar" {
-                // POSIX emulation for stdio.h
                 i += 2; // putchar (
                 let val = &tokens[i];
                 out.push_str(&self.gen_load(val));
                 out.push_str("PUSH 4\nSYSCALL\n"); // Syscall 4 = STDOUT
                 while tokens[i] != ";" { i += 1; }
+            } else if tokens[i] == "exec" {
+                i += 2; // exec (
+                let fname = &tokens[i];
+                
+                // Allocate string in heap
+                out.push_str(&format!("PUSH {} LSTORE {}\n", self.heap_offset, self.local_offset));
+                let mut curr_ptr = self.heap_offset;
+                for b in fname.bytes() {
+                    out.push_str(&format!("PUSH {} PUSH {} STOREB\n", b, curr_ptr));
+                    curr_ptr += 1;
+                }
+                out.push_str(&format!("PUSH 0 PUSH {} STOREB\n", curr_ptr));
+                self.heap_offset = curr_ptr + 1;
+
+                // Call Syscall 5 (EXEC)
+                out.push_str(&format!("LLOAD {}\n", self.local_offset));
+                out.push_str("PUSH 5\nSYSCALL\n");
+                self.local_offset += 8;
+
+                while tokens[i] != ";" { i += 1; }
             } else if tokens[i] == "return" {
-                // return a + b ;
                 i += 1;
                 let mut expr = Vec::new();
-                while tokens[i] != ";" {
-                    expr.push(tokens[i].clone());
-                    i += 1;
-                }
-                if expr.len() == 1 {
-                    out.push_str(&self.gen_load(&expr[0]));
-                } else if expr.len() == 3 && expr[1] == "+" {
+                while tokens[i] != ";" { expr.push(tokens[i].clone()); i += 1; }
+                if expr.len() == 1 { out.push_str(&self.gen_load(&expr[0])); } 
+                else if expr.len() == 3 && expr[1] == "+" {
                     out.push_str(&self.gen_load(&expr[0]));
                     out.push_str(&self.gen_load(&expr[2]));
                     out.push_str("ADD\n");
                 }
-                // Syscall 1 = EXIT CODE
                 out.push_str("PUSH 1\nSYSCALL\nHALT\n");
             }
             i += 1;
@@ -197,36 +209,40 @@ impl Machine {
             0xF0 => { 
                 let id = self.stack.pop().unwrap(); 
                 if id == 1 { 
-                    // Syscall 1 (Process Exit Return Val)
-                    let v = self.stack.pop().unwrap(); 
-                    self.vfs.insert("out.dat".into(), v.to_le_bytes().to_vec()); 
+                    let v = self.stack.pop().unwrap(); self.vfs.insert("out.dat".into(), v.to_le_bytes().to_vec()); 
                 } else if id == 2 {
-                    // Syscall 2 (VFS Read)
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let buf_ptr = self.stack.pop().unwrap() as usize;
-                    let mut fname = String::new();
-                    let mut p = fname_ptr;
+                    let mut fname = String::new(); let mut p = fname_ptr;
                     while self.memory[p] != 0 { fname.push(self.memory[p] as char); p += 1; }
                     if let Some(data) = self.vfs.get(&fname) {
                         for (idx, &b) in data.iter().enumerate() { self.memory[buf_ptr + idx] = b; }
                     }
                 } else if id == 3 {
-                    // Syscall 3 (VFS Write)
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let buf_ptr = self.stack.pop().unwrap() as usize;
                     let len = self.stack.pop().unwrap() as usize;
-                    let mut fname = String::new();
-                    let mut p = fname_ptr;
+                    let mut fname = String::new(); let mut p = fname_ptr;
                     while self.memory[p] != 0 { fname.push(self.memory[p] as char); p += 1; }
                     let data = self.memory[buf_ptr..buf_ptr+len].to_vec();
                     self.vfs.insert(fname, data);
                 } else if id == 4 {
-                    // Syscall 4 (STDOUT Char Emit) -> mapped via <stdio.h> putchar
                     let c = self.stack.pop().unwrap() as u8;
-                    if let Some(buf) = self.vfs.get_mut("stdout.txt") {
-                        buf.push(c);
+                    if let Some(buf) = self.vfs.get_mut("stdout.txt") { buf.push(c); } 
+                    else { self.vfs.insert("stdout.txt".into(), vec![c]); }
+                } else if id == 5 {
+                    // Syscall 5 (EXEC / Context Switch)
+                    let fname_ptr = self.stack.pop().unwrap() as usize;
+                    let mut fname = String::new(); let mut p = fname_ptr;
+                    while self.memory[p] != 0 { fname.push(self.memory[p] as char); p += 1; }
+                    if let Some(data) = self.vfs.get(&fname) {
+                        let size = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
+                        self.memory[0..size].copy_from_slice(&data[16..16+size]);
+                        self.ip = 0;
+                        self.stack.clear();
+                        self.call_stack.clear();
                     } else {
-                        self.vfs.insert("stdout.txt".into(), vec![c]);
+                        return Err(format!("EXEC FAIL: {}", fname));
                     }
                 }
             }
@@ -238,14 +254,18 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
-    report.push_str("TEST: POSIX_CRT_HEADERS ... ");
+    report.push_str("TEST: POSIX_EXEC_SYSCALL ... ");
 
-    // Standard C code leveraging stdio.h POSIX hooks
+    // 1. Prepare "clang.bin" (A mock payload that prints 'O' 'K')
+    // 'O' = 79, 'K' = 75
+    let clang_asm = "PUSH 79 PUSH 4 SYSCALL PUSH 75 PUSH 4 SYSCALL HALT";
+    let clang_bin = Assembler::compile_bef(clang_asm);
+
+    // 2. The host C program that execs the payload using POSIX <unistd.h>
     let c_src = "
-        #include <stdio.h>
+        #include <unistd.h>
         int main ( ) { 
-            putchar ( 79 ) ; 
-            putchar ( 75 ) ; 
+            exec ( clang.bin ) ; 
             return 0 ; 
         }
     ";
@@ -254,6 +274,7 @@ pub fn run_suite() -> String {
     let bin = Assembler::compile_bef(&asm);
 
     let mut vm = Machine::new();
+    vm.vfs.insert("clang.bin".into(), clang_bin);
     vm.load(&bin);
     
     let mut fuel = 1000;
