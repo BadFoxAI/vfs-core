@@ -46,3 +46,5 @@ The platform is the VFS, the ABI, and the runtime contract. Everything else is s
 - **Phase 7.2**: Completed Self-Hosting Simulation. The environment can now host a builder program which generates a raw executable binary, writes it to the VFS, and immediately executes it. The loop is closed.
 
 - **Phase 7 Complete**: DRE is now self-hosting capable. The system successfully built, wrote, and executed a binary entirely within the VFS.
+
+- **Phase 8.1**: Implemented strictly hardened memory access. The VM now performs bounds checking on every read/write and properly reports `Segmentation Fault` instead of crashing.

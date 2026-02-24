@@ -13,10 +13,9 @@ Host-Independent VFS + Custom ABI + POSIX Shim.
 [x] PHASE 5: BOOTSTRAP TOOLCHAIN COMPLETE.
 [x] PHASE 6: C COMPILER BOOTSTRAP COMPLETE.
 [x] PHASE 7: SELF-HOSTING COMPLETE.
-    [x] 7.1 Implement POSIX `exec` (Context Switching).
-    [x] 7.2 Simulate Self-Hosting Toolchain (Builder -> Binary -> Exec).
 [~] PHASE 8: FINAL SYSTEM HARDENING
-    [ ] 8.1 Memory Safety & Bounds Checking.
+    [x] 8.1 Memory Safety & Bounds Checking (Segfaults).
+    [ ] 8.2 Resource Quotas & Cycle Limits.
 
 UNIT TEST SUITE:
 "#;
@@ -202,7 +201,7 @@ impl Assembler {
     }
 }
 
-// --- VM ---
+// --- VM (HARDENED) ---
 pub struct Machine {
     pub stack: Vec<u64>,
     pub call_stack: Vec<usize>,
@@ -214,41 +213,75 @@ pub struct Machine {
 
 impl Machine {
     pub fn new() -> Self { Self { stack: vec![], call_stack: vec![], memory: vec![0; 8192], ip: 0, bp: 4096, vfs: HashMap::new() } }
+    
+    // Bounds Checking Helpers
+    fn check_bounds(&self, addr: usize, size: usize) -> Result<(), String> {
+        if addr + size > self.memory.len() {
+            return Err(format!("Segmentation Fault: Access at {}, Limit {}", addr, self.memory.len()));
+        }
+        Ok(())
+    }
+
+    fn read_u8(&self, addr: usize) -> Result<u8, String> {
+        self.check_bounds(addr, 1)?;
+        Ok(self.memory[addr])
+    }
+
+    fn write_u8(&mut self, addr: usize, val: u8) -> Result<(), String> {
+        self.check_bounds(addr, 1)?;
+        self.memory[addr] = val;
+        Ok(())
+    }
+
+    fn read_u64(&self, addr: usize) -> Result<u64, String> {
+        self.check_bounds(addr, 8)?;
+        Ok(u64::from_le_bytes(self.memory[addr..addr+8].try_into().unwrap()))
+    }
+
+    fn write_u64(&mut self, addr: usize, val: u64) -> Result<(), String> {
+        self.check_bounds(addr, 8)?;
+        self.memory[addr..addr+8].copy_from_slice(&val.to_le_bytes());
+        Ok(())
+    }
+
     pub fn load(&mut self, data: &[u8]) {
         let size = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
-        self.memory[0..size].copy_from_slice(&data[16..16+size]);
+        if size <= self.memory.len() {
+            self.memory[0..size].copy_from_slice(&data[16..16+size]);
+        }
     }
+
     pub fn step(&mut self) -> Result<bool, String> {
-        let op = self.memory[self.ip];
+        let op = self.read_u8(self.ip)?;
         self.ip += 1;
         match op {
             0x00 => return Ok(false),
-            0x10 => { let v = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()); self.ip+=8; self.stack.push(v); }
+            0x10 => { let v = self.read_u64(self.ip)?; self.ip+=8; self.stack.push(v); }
             0x20 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a+b); }
             0x25 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a<b {1} else {0}); }
-            0x40 => { self.ip = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; }
+            0x40 => { self.ip = self.read_u64(self.ip)? as usize; }
             0x41 => { 
-                let t = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; 
+                let t = self.read_u64(self.ip)? as usize; 
                 let cond = self.stack.pop().unwrap();
                 if cond == 0 { self.ip = t; } else { self.ip += 8; }
             }
             0x60 => { 
-                let off = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; 
+                let off = self.read_u64(self.ip)? as usize; 
                 self.ip += 8; 
-                let val = u64::from_le_bytes(self.memory[self.bp+off..self.bp+off+8].try_into().unwrap());
+                let val = self.read_u64(self.bp + off)?;
                 self.stack.push(val);
             }
             0x61 => { 
-                let off = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; 
+                let off = self.read_u64(self.ip)? as usize; 
                 self.ip += 8; 
                 let v = self.stack.pop().unwrap();
-                self.memory[self.bp+off..self.bp+off+8].copy_from_slice(&v.to_le_bytes());
+                self.write_u64(self.bp + off, v)?;
             }
-            0x62 => { let addr = self.stack.pop().unwrap() as usize; self.stack.push(u64::from_le_bytes(self.memory[addr..addr+8].try_into().unwrap())); }
-            0x63 => { let addr = self.stack.pop().unwrap() as usize; let val = self.stack.pop().unwrap(); self.memory[addr..addr+8].copy_from_slice(&val.to_le_bytes()); }
-            0x64 => { let addr = self.stack.pop().unwrap() as usize; self.stack.push(self.memory[addr] as u64); }
-            0x65 => { let addr = self.stack.pop().unwrap() as usize; self.memory[addr] = self.stack.pop().unwrap() as u8; }
-            0x80 => { let t = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; self.call_stack.push(self.ip + 8); self.ip = t; }
+            0x62 => { let addr = self.stack.pop().unwrap() as usize; let val = self.read_u64(addr)?; self.stack.push(val); }
+            0x63 => { let addr = self.stack.pop().unwrap() as usize; let val = self.stack.pop().unwrap(); self.write_u64(addr, val)?; }
+            0x64 => { let addr = self.stack.pop().unwrap() as usize; let val = self.read_u8(addr)? as u64; self.stack.push(val); }
+            0x65 => { let addr = self.stack.pop().unwrap() as usize; let val = self.stack.pop().unwrap() as u8; self.write_u8(addr, val)?; }
+            0x80 => { let t = self.read_u64(self.ip)? as usize; self.call_stack.push(self.ip + 8); self.ip = t; }
             0x81 => { self.ip = self.call_stack.pop().unwrap(); }
             0xF0 => { 
                 let id = self.stack.pop().unwrap(); 
@@ -258,17 +291,18 @@ impl Machine {
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let buf_ptr = self.stack.pop().unwrap() as usize;
                     let mut fname = String::new(); let mut p = fname_ptr;
-                    while self.memory[p] != 0 { fname.push(self.memory[p] as char); p += 1; }
+                    while self.read_u8(p)? != 0 { fname.push(self.read_u8(p)? as char); p += 1; }
                     if let Some(data) = self.vfs.get(&fname) {
-                        for (idx, &b) in data.iter().enumerate() { self.memory[buf_ptr + idx] = b; }
+                        for (idx, &b) in data.iter().enumerate() { self.write_u8(buf_ptr + idx, b)?; }
                     }
                 } else if id == 3 {
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let buf_ptr = self.stack.pop().unwrap() as usize;
                     let len = self.stack.pop().unwrap() as usize;
                     let mut fname = String::new(); let mut p = fname_ptr;
-                    while self.memory[p] != 0 { fname.push(self.memory[p] as char); p += 1; }
-                    let data = self.memory[buf_ptr..buf_ptr+len].to_vec();
+                    while self.read_u8(p)? != 0 { fname.push(self.read_u8(p)? as char); p += 1; }
+                    let mut data = Vec::with_capacity(len);
+                    for i in 0..len { data.push(self.read_u8(buf_ptr + i)?); }
                     self.vfs.insert(fname, data);
                 } else if id == 4 {
                     let c = self.stack.pop().unwrap() as u8;
@@ -277,9 +311,10 @@ impl Machine {
                 } else if id == 5 {
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let mut fname = String::new(); let mut p = fname_ptr;
-                    while self.memory[p] != 0 { fname.push(self.memory[p] as char); p += 1; }
+                    while self.read_u8(p)? != 0 { fname.push(self.read_u8(p)? as char); p += 1; }
                     if let Some(data) = self.vfs.get(&fname) {
                         let size = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
+                        if size > self.memory.len() { return Err("EXEC Fail: Binary too large".into()); }
                         self.memory[0..size].copy_from_slice(&data[16..16+size]);
                         self.ip = 0; self.stack.clear(); self.call_stack.clear();
                     } else { return Err(format!("EXEC FAIL: {}", fname)); }
@@ -293,33 +328,12 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
-    report.push_str("TEST: SELF_HOSTING_BOOTSTRAP ... ");
+    report.push_str("TEST: SEGFAULT_HANDLING ... ");
 
+    // Program: poke ( 9000 , 1 ) ; -> Should trigger Segfault (Limit is 8192)
     let c_src = "
-        str bin = payload.bin ;
-        int buf = 4000 ;
-        
-        poke ( buf , 231 ) ; poke ( buf + 1 , 17 ) ; poke ( buf + 2 , 177 ) ; poke ( buf + 3 , 0 ) ;
-        
-        poke ( buf + 8 , 20 ) ; poke ( buf + 9 , 0 ) ; poke ( buf + 10 , 0 ) ; poke ( buf + 11 , 0 ) ;
-        
-        int code = 4016 ;
-        poke ( code , 16 ) ; poke ( code + 1 , 90 ) ; 
-        poke ( code + 2 , 0 ) ; poke ( code + 3 , 0 ) ; poke ( code + 4 , 0 ) ; 
-        poke ( code + 5 , 0 ) ; poke ( code + 6 , 0 ) ; poke ( code + 7 , 0 ) ; poke ( code + 8 , 0 ) ;
-        
-        poke ( code + 9 , 16 ) ; poke ( code + 10 , 4 ) ;
-        poke ( code + 11 , 0 ) ; poke ( code + 12 , 0 ) ; poke ( code + 13 , 0 ) ; 
-        poke ( code + 14 , 0 ) ; poke ( code + 15 , 0 ) ; poke ( code + 16 , 0 ) ; poke ( code + 17 , 0 ) ;
-        
-        poke ( code + 18 , 240 ) ;
-        
-        poke ( code + 19 , 0 ) ;
-        
-        syscall ( 3 , bin , buf , 36 ) ;
-        
-        exec ( bin ) ;
-        
+        int bad_ptr = 9000 ;
+        poke ( bad_ptr , 1 ) ;
         return 0 ;
     ";
 
@@ -330,30 +344,20 @@ pub fn run_suite() -> String {
     let mut vm = Machine::new();
     vm.load(&bin);
     
-    let mut fuel = 10000;
-    let mut error: Option<String> = None;
+    let mut result = Ok(false);
+    let mut fuel = 1000;
     while fuel > 0 {
-        match vm.step() {
-            Ok(running) => if !running { break; },
-            Err(e) => { error = Some(e); break; }
-        }
+        result = vm.step();
+        if result.is_err() || !result.clone().unwrap() { break; }
         fuel -= 1;
     }
 
-    if let Some(e) = error {
-        report.push_str(&format!("FAIL (Runtime Error: {})\n", e));
-    } else if let Some(b) = vm.vfs.get("stdout.txt") {
-        if b.len() == 1 && b[0] == 90 { 
-            report.push_str("PASS\n"); 
-        } else { 
-            report.push_str(&format!("FAIL (Val: {:?})\n", b)); 
-        }
-    } else { 
-        if let Some(ret) = vm.vfs.get("out.dat") {
-             report.push_str(&format!("FAIL (Fell Through to Return: {:?})\n", ret));
-        } else {
-             report.push_str("FAIL (IO - No Output)\n");
-        }
+    match result {
+        Err(e) => {
+            if e.contains("Segmentation Fault") { report.push_str("PASS\n"); }
+            else { report.push_str(&format!("FAIL (Wrong Error: {})\n", e)); }
+        },
+        Ok(_) => report.push_str("FAIL (No Error)\n"),
     }
     report
 }
