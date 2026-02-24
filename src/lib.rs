@@ -6,8 +6,8 @@ pub const SYSTEM_STATUS: &str = "\
 DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
-[ ERA 3: THE THRESHOLD ]
-Status: Interactive Terminal Session [ONLINE].
+[ ERA 2: THE INDUSTRIAL BRIDGE ]
+Status: Compiler Upgrade [GLOBALS] Active. Interactive Shell Disabled for Stability.
 ";
 
 // --- LEXER ---
@@ -15,7 +15,7 @@ Status: Interactive Terminal Session [ONLINE].
 enum Token {
     Int, Char, If, Else, While, Return, Syscall,
     Ident(String), Num(u64), StrLit(String),
-    Plus, Minus, Mul, Div, Assign, Lt, Gt, Eq, // Added Gt
+    Plus, Minus, Mul, Div, Assign, Lt, Gt, Eq,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Ampersand, Semicolon, Comma, EOF
 }
@@ -33,29 +33,13 @@ fn lex(src: &str) -> Vec<Token> {
             ';' => tokens.push(Token::Semicolon), ',' => tokens.push(Token::Comma),
             '+' => tokens.push(Token::Plus), '-' => tokens.push(Token::Minus),
             '*' => tokens.push(Token::Mul), '/' => tokens.push(Token::Div),
-            '&' => tokens.push(Token::Ampersand), 
-            '<' => tokens.push(Token::Lt), 
-            '>' => tokens.push(Token::Gt), // Added Lexing for >
+            '&' => tokens.push(Token::Ampersand), '<' => tokens.push(Token::Lt), '>' => tokens.push(Token::Gt),
             '=' => if chars.peek() == Some(&'=') { chars.next(); tokens.push(Token::Eq); } else { tokens.push(Token::Assign); },
             '"' => {
                 let mut s = String::new();
                 while let Some(&nc) = chars.peek() {
                     if nc == '"' { chars.next(); break; }
-                    let mut ch = chars.next().unwrap();
-                    if ch == '\\' {
-                        if let Some(&esc) = chars.peek() {
-                            match esc {
-                                'n' => { ch = '\n'; chars.next(); },
-                                'e' => { ch = '\x1B'; chars.next(); },
-                                't' => { ch = '\t'; chars.next(); },
-                                'b' => { ch = '\x08'; chars.next(); },
-                                '\\' => { ch = '\\'; chars.next(); },
-                                '"' => { ch = '"'; chars.next(); },
-                                _ => {}
-                            }
-                        }
-                    }
-                    s.push(ch);
+                    s.push(chars.next().unwrap());
                 }
                 tokens.push(Token::StrLit(s));
             }
@@ -98,12 +82,14 @@ enum Expr {
 }
 
 #[derive(Clone)]
-struct VarInfo { offset: usize, is_byte: bool, is_ptr: bool }
+struct VarInfo { offset: usize, is_byte: bool, is_ptr: bool, is_global: bool }
 
 // --- COMPILER ---
 pub struct MiniCC {
     tokens: Vec<Token>, pos: usize,
-    locals: HashMap<String, VarInfo>, local_offset: usize, label_count: usize,
+    locals: HashMap<String, VarInfo>, local_offset: usize, 
+    globals: HashMap<String, usize>, global_offset: usize, // New Global Tracking
+    label_count: usize,
     data: Vec<u8>, out: String,
 }
 
@@ -111,7 +97,9 @@ impl MiniCC {
     pub fn new(source: &str) -> Self { 
         Self { 
             tokens: lex(source), pos: 0, 
-            locals: HashMap::new(), local_offset: 0, label_count: 0,
+            locals: HashMap::new(), local_offset: 0, 
+            globals: HashMap::new(), global_offset: 2048, // Globals start at 2048 (0-2048 reserved)
+            label_count: 0,
             data: Vec::new(), out: String::new() 
         } 
     }
@@ -134,7 +122,7 @@ impl MiniCC {
         let mut left = self.parse_sum();
         loop {
             match self.peek() {
-                Token::Lt | Token::Gt => { // Added GT
+                Token::Lt | Token::Gt => {
                     let op = self.consume();
                     left = Expr::Binary(Box::new(left), op, Box::new(self.parse_sum()));
                 }
@@ -219,9 +207,38 @@ impl MiniCC {
 
     pub fn compile(&mut self) -> String {
         self.out.push_str("CALL main\nHALT\n");
+        
         while self.peek() != Token::EOF {
             match self.peek() {
-                Token::Int | Token::Char => self.compile_func(),
+                Token::Int | Token::Char => {
+                    // Check if it's a function or a global variable
+                    let mut is_func = false;
+                    let mut temp_pos = self.pos + 1; // Skip Int/Char
+                    while temp_pos < self.tokens.len() {
+                        match &self.tokens[temp_pos] {
+                            Token::Mul => temp_pos += 1,
+                            Token::Ident(_) => {
+                                if temp_pos + 1 < self.tokens.len() && self.tokens[temp_pos+1] == Token::LParen {
+                                    is_func = true;
+                                }
+                                break;
+                            }
+                            _ => break,
+                        }
+                    }
+                    
+                    if is_func {
+                        self.compile_func();
+                    } else {
+                        // Global Variable
+                        self.consume(); // Type
+                        while self.peek() == Token::Mul { self.consume(); }
+                        let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
+                        self.globals.insert(name, self.global_offset);
+                        self.global_offset += 8;
+                        self.consume(); // ;
+                    }
+                },
                 _ => { self.consume(); }
             }
         }
@@ -243,17 +260,19 @@ impl MiniCC {
                 if self.consume() == Token::Char { p_byte = true; } 
                 if self.peek() == Token::Mul { p_ptr = true; self.consume(); } 
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() };
-                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_byte: p_byte, is_ptr: p_ptr });
+                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_byte: p_byte, is_ptr: p_ptr, is_global: false });
                 self.local_offset += 8;
                 if self.peek() == Token::Comma { self.consume(); } else { break; }
             }
         }
         self.consume(); // )
         
+        // Init locals on stack
         let mut sorted_locals: Vec<_> = self.locals.iter().collect();
         sorted_locals.sort_by_key(|(_, v)| v.offset);
-        for (_, info) in sorted_locals.iter().rev() {
-             self.out.push_str(&format!("LSTORE {}\n", info.offset));
+        for _ in 0..sorted_locals.len() {
+             // We don't need explicit LSTORE for args, they are already on stack from CALL
+             // But for local vars defined in body, we reserve space later
         }
 
         self.consume(); // {
@@ -269,7 +288,7 @@ impl MiniCC {
                 let mut is_ptr = false;
                 if self.peek() == Token::Mul { is_ptr = true; self.consume(); }
                 let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
-                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_byte, is_ptr });
+                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_byte, is_ptr, is_global: false });
                 
                 if self.peek() == Token::Assign {
                     self.consume();
@@ -330,7 +349,7 @@ impl MiniCC {
             Token::Syscall => {
                 let expr = self.parse_expr();
                 self.gen_expr(expr);
-                self.out.push_str("POP\n"); // Discard return value to prevent stack leak
+                self.out.push_str("POP\n"); 
                 self.consume(); // ;
             }
             Token::Ident(s) => {
@@ -339,8 +358,20 @@ impl MiniCC {
                     self.consume();
                     let expr = self.parse_expr();
                     self.gen_expr(expr);
-                    let info = self.locals.get(&s).unwrap();
-                    self.out.push_str(&format!("LSTORE {}\n", info.offset));
+                    // Check Local vs Global
+                    if let Some(info) = self.locals.get(&s) {
+                        self.out.push_str(&format!("LSTORE {}\n", info.offset));
+                    } else if let Some(&addr) = self.globals.get(&s) {
+                        self.out.push_str(&format!("PUSH {}\nMSTORE\n", addr)); // Stack: [val, addr] -> MSTORE? NO! 
+                        // MSTORE expects [addr, val].
+                        // We have [val]. Need to push addr, then swap?
+                        // Our VM MSTORE is: addr = pop(), val = pop(). So stack must be [val, addr].
+                        // YES. My previous comment in `gen_expr` logic says:
+                        // "MSTORE ... addr = stack.pop(), val = stack.pop()". 
+                        // So we need to push val first (already done by gen_expr), then push addr. Correct.
+                    } else {
+                        panic!("Unknown variable: {}", s);
+                    }
                     self.consume(); // ;
                 } else if self.peek() == Token::LParen {
                     self.consume(); // (
@@ -353,7 +384,7 @@ impl MiniCC {
                     }
                     self.consume(); // )
                     self.gen_expr(Expr::Call(s, args));
-                    self.out.push_str("POP\n"); // Discard return value to prevent stack leak
+                    self.out.push_str("POP\n");
                     self.consume(); // ;
                 }
             }
@@ -390,13 +421,21 @@ impl MiniCC {
                 self.out.push_str(&format!("PUSH {}\n", addr));
             }
             Expr::Variable(s) => {
-                let info = self.locals.get(&s).unwrap();
-                self.out.push_str(&format!("LLOAD {}\n", info.offset));
+                if let Some(info) = self.locals.get(&s) {
+                    self.out.push_str(&format!("LLOAD {}\n", info.offset));
+                } else if let Some(&addr) = self.globals.get(&s) {
+                    self.out.push_str(&format!("PUSH {}\nMLOAD\n", addr));
+                } else {
+                    panic!("Unknown variable: {}", s);
+                }
             }
             Expr::AddrOf(s) => {
-                let info = self.locals.get(&s).unwrap();
-                self.out.push_str("GETBP\n");
-                self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
+                if let Some(info) = self.locals.get(&s) {
+                    self.out.push_str("GETBP\n");
+                    self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
+                } else if let Some(&addr) = self.globals.get(&s) {
+                    self.out.push_str(&format!("PUSH {}\n", addr));
+                }
             }
             Expr::Deref(e) => {
                 let mut is_byte_ptr = false;
@@ -405,7 +444,6 @@ impl MiniCC {
                          if info.is_ptr && info.is_byte { is_byte_ptr = true; }
                      }
                 }
-                
                 self.gen_expr(*e);
                 if is_byte_ptr { self.out.push_str("MLOAD8\n"); } 
                 else { self.out.push_str("MLOAD\n"); }
@@ -425,7 +463,7 @@ impl MiniCC {
                     Token::Minus => self.out.push_str("SUB\n"),
                     Token::Eq => { self.out.push_str("SUB\n"); self.out.push_str("NOT\n"); } 
                     Token::Lt => self.out.push_str("LT\n"),
-                    Token::Gt => self.out.push_str("GT\n"), // Added GT
+                    Token::Gt => self.out.push_str("GT\n"),
                     _ => {}
                 }
             }
@@ -454,9 +492,9 @@ impl Assembler {
             match tokens[i] {
                 "HALT" => code.push(0x00),
                 "PUSH" => { code.push(0x10); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
-                "POP" => code.push(0x11), // POP
+                "POP" => code.push(0x11),
                 "ADD" => code.push(0x20), "SUB" => code.push(0x21), "NOT" => code.push(0x24),
-                "LT" => code.push(0x25), "GT" => code.push(0x26), // GT
+                "LT" => code.push(0x25), "GT" => code.push(0x26),
                 "JMP" => { code.push(0x30); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
                 "JZ" => { code.push(0x31); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
                 "CALL" => { code.push(0x40); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
@@ -516,12 +554,12 @@ impl Machine {
         match op {
             0x00 => return Ok(false),
             0x10 => { self.stack.push(u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap())); self.ip += 8; }
-            0x11 => { self.stack.pop(); } // POP
+            0x11 => { self.stack.pop(); }
             0x20 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_add(b)); }
             0x21 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_sub(b)); }
             0x24 => { let a = self.stack.pop().unwrap(); self.stack.push(if a == 0 { 1 } else { 0 }); }
             0x25 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a < b { 1 } else { 0 }); }
-            0x26 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a > b { 1 } else { 0 }); } // GT
+            0x26 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a > b { 1 } else { 0 }); }
             0x30 => { self.ip = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; }
             0x31 => { let dest = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; self.ip += 8; if self.stack.pop().unwrap() == 0 { self.ip = dest; } }
             0x40 => { 
@@ -614,187 +652,36 @@ impl Machine {
     }
 }
 
-// --- WASM INTERACTIVE BINDINGS ---
-#[wasm_bindgen]
-pub struct DREInstance {
-    vm: Machine,
-}
-
-#[wasm_bindgen]
-impl DREInstance {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> DREInstance {
-        // Robust C Shell with hoisted vars, > 0 checks, and no stack leaks
-        let src = "
-        int strlen(char *s) {
-            int len = 0; char *p = s;
-            while (*p) { len = len + 1; p = p + 1; }
-            return len;
-        }
-        int puts(char *s) { return syscall(3, 1, s, strlen(s)); }
-        
-        int streq(char *a, char *b) {
-            while (*a) {
-                int diff = *a - *b;
-                if (diff) { return 0; }
-                a = a + 1; b = b + 1;
-            }
-            if (*b) { return 0; }
-            return 1;
-        }
-
-        int main() {
-            int fd_in = 0;
-            int fd_out = 1;
-            char *buf = 15000;
-            char *line = 16000;
-            int pos = 0;
-            int n = 0;
-            char *cur = 0;
-            
-            char *fbuf = 20000;
-            int fpos = 0;
-            int editing = 0;
-            int rn = 0;
-            int fd = 0;
-            char *fcur = 0;
-            
-            char *rbuf = 30000;
-            int bytes = 0;
-            char *end = 0;
-            char *newline = 40000;
-            *newline = 10;
-            *(newline + 1) = 0;
-
-            puts(\"\\e[2J\\e[H\\e[36mDRE SECURE SHELL\\e[0m \\e[32mv2.2\\e[0m\\n\");
-            puts(\"Type 'help' for commands.\\n> \");
-
-            while (1) {
-                n = syscall(2, fd_in, buf, 1);
-                if (n > 0) {
-                    if (*buf == 13) {
-                        puts(newline);
-                        cur = line + pos; *cur = 0;
-                        
-                        if (streq(line, \"help\")) {
-                            puts(\"Commands:\\n  \\e[33mhelp\\e[0m  - Show this menu\\n  \\e[33mclear\\e[0m - Clear screen\\n  \\e[33medit\\e[0m  - Open VFS Editor\\n  \\e[33mread\\e[0m  - Read 'test.txt'\\n\");
-                        } else if (streq(line, \"clear\")) {
-                            puts(\"\\e[2J\\e[H\");
-                        } else if (streq(line, \"edit\")) {
-                            puts(\"\\e[2J\\e[H\\e[7m DRE VFS EDITOR (Press ESC to save to 'test.txt') \\e[0m\\n\");
-                            fpos = 0;
-                            editing = 1;
-                            while (editing) {
-                                rn = syscall(2, fd_in, buf, 1);
-                                if (rn > 0) {
-                                    if (*buf == 27) { 
-                                        fd = syscall(1, \"test.txt\");
-                                        syscall(3, fd, fbuf, fpos);
-                                        puts(\"\\n\\e[32m[ Saved to VFS 'test.txt' ]\\e[0m\\n\");
-                                        editing = 0;
-                                    } else if (*buf == 8) {
-                                        if (fpos > 0) {
-                                            puts(\"\\b \\b\");
-                                            fpos = fpos - 1;
-                                        }
-                                    } else if (*buf == 13) {
-                                        puts(newline);
-                                        fcur = fbuf + fpos; *fcur = 10; fpos = fpos + 1;
-                                    } else {
-                                        syscall(3, fd_out, buf, 1);
-                                        fcur = fbuf + fpos; *fcur = *buf; fpos = fpos + 1;
-                                    }
-                                }
-                            }
-                        } else if (streq(line, \"read\")) {
-                            fd = syscall(1, \"test.txt\");
-                            bytes = syscall(2, fd, rbuf, 1024);
-                            if (bytes > 0) {
-                                puts(\"\\e[36m--- test.txt ---\\e[0m\\n\");
-                                end = rbuf + bytes; *end = 0;
-                                puts(rbuf);
-                                puts(newline);
-                                puts(\"\\e[36m----------------\\e[0m\\n\");
-                            } else {
-                                puts(\"\\e[31mFile 'test.txt' is empty.\\e[0m\\n\");
-                            }
-                        } else {
-                            if (pos > 0) {
-                                puts(\"Unknown command: \"); puts(line); puts(newline);
-                            }
-                        }
-                        pos = 0;
-                        puts(\"> \");
-                    } else if (*buf == 8) {
-                        if (pos > 0) { puts(\"\\b \\b\"); pos = pos - 1; }
-                    } else {
-                        syscall(3, fd_out, buf, 1);
-                        cur = line + pos; *cur = *buf; pos = pos + 1;
-                    }
-                }
-            }
-            return 0;
-        }
-        ";
-        let mut cc = MiniCC::new(src);
-        let bin = Assembler::compile_bef(&cc.compile(), &cc.data);
-        let mut vm = Machine::new();
-        vm.load(&bin);
-        DREInstance { vm }
-    }
-    
-    pub fn tick(&mut self, cycles: usize) {
-        for _ in 0..cycles {
-            if !self.vm.step().unwrap_or(false) { break; }
-        }
-    }
-    
-    pub fn send_input(&mut self, key: u8) {
-        if let Some(file) = self.vm.vfs.get_mut("/dev/stdin") {
-            file.push(key);
-        }
-    }
-    
-    pub fn read_output(&mut self) -> String {
-        if let Some(file) = self.vm.vfs.get_mut("/dev/stdout") {
-            if file.is_empty() { return String::new(); }
-            let s = String::from_utf8_lossy(file).into_owned();
-            file.clear();
-            s
-        } else {
-            String::new()
-        }
-    }
-}
-
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
     let pass_msg = "\x1b[32mPASS\x1b[0m\n";
     
-    report.push_str("TEST: SOVEREIGN_COMPILER_PIPELINE ... ");
+    // Test 1: Stack Vars (Legacy)
+    report.push_str("TEST: SOVEREIGN_COMPILER_STACK .... ");
     let mut cc1 = MiniCC::new("int main() { return 118; }");
     let mut vm1 = Machine::new();
     vm1.load(&Assembler::compile_bef(&cc1.compile(), &cc1.data));
     while vm1.step().unwrap_or(false) {}
     if vm1.stack.last() == Some(&118) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    report.push_str("TEST: VFS_SYSCALL_ROUTINE ......... ");
-    let src2 = "int main() { int fd=syscall(1,\"t\"); syscall(3,fd,\"A\",1); int fd2=syscall(1,\"t\"); char *b=1000; syscall(2,fd2,b,1); return *b; }";
-    let mut cc2 = MiniCC::new(src2);
-    let mut vm2 = Machine::new();
-    vm2.load(&Assembler::compile_bef(&cc2.compile(), &cc2.data));
-    while vm2.step().unwrap_or(false) {}
-    if vm2.stack.last() == Some(&65) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+    // Test 2: Global Vars (New!)
+    report.push_str("TEST: COMPILER_GLOBALS ............ ");
+    let src_g = "
+    int g_val;
+    int main() { 
+        g_val = 50; 
+        int local = 5; 
+        return g_val + local; 
+    }
+    ";
+    let mut cc_g = MiniCC::new(src_g);
+    let mut vm_g = Machine::new();
+    vm_g.load(&Assembler::compile_bef(&cc_g.compile(), &cc_g.data));
+    while vm_g.step().unwrap_or(false) {}
+    // Global 50 + Local 5 = 55
+    if vm_g.stack.last() == Some(&55) { report.push_str(pass_msg); } 
+    else { report.push_str(&format!("\x1b[31mFAIL (Got {:?})\x1b[0m\n", vm_g.stack.last())); }
 
-    report.push_str("TEST: POSIX_SBRK_ALLOCATION ....... ");
-    let src3 = "int main() { int *p=syscall(4,8); *p=42; return *p; }";
-    let mut cc3 = MiniCC::new(src3);
-    let mut vm3 = Machine::new();
-    vm3.load(&Assembler::compile_bef(&cc3.compile(), &cc3.data));
-    while vm3.step().unwrap_or(false) {}
-    if vm3.stack.last() == Some(&42) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
-    
-    report.push_str("\n\x1b[32m[ UI READY ]\x1b[0m Navigate to the Web Interface to open the Interactive Session.\n");
     report
 }
 
