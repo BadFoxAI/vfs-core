@@ -7,7 +7,7 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
 [ ERA 2: THE INDUSTRIAL BRIDGE ]
-Status: Compiler Upgrade [ARRAY POINTER DECAY] Active.
+Status: Compiler Fix [GLOBAL ARRAY TYPE TRACKING] Active.
 ";
 
 // --- LEXER ---
@@ -87,10 +87,13 @@ enum Expr {
 }
 
 #[derive(Clone)]
-struct VarInfo { offset: usize, is_array: bool } // Added is_array
+struct VarInfo { offset: usize, is_array: bool } 
 
 #[derive(Clone)]
-struct StructField { offset: usize, _size: usize }
+struct GlobalInfo { offset: usize, is_array: bool } // New struct to track global types
+
+#[derive(Clone)]
+struct StructField { offset: usize, size: usize }
 
 #[derive(Clone)]
 struct StructDef { size: usize, fields: HashMap<String, StructField> }
@@ -99,10 +102,10 @@ struct StructDef { size: usize, fields: HashMap<String, StructField> }
 pub struct MiniCC {
     tokens: Vec<Token>, pos: usize,
     locals: HashMap<String, VarInfo>, local_offset: usize, 
-    globals: HashMap<String, usize>, global_offset: usize,
+    globals: HashMap<String, GlobalInfo>, global_offset: usize, // Upgraded globals map
     structs: HashMap<String, StructDef>,
-    data: Vec<u8>, out: String,
     label_count: usize,
+    data: Vec<u8>, out: String,
 }
 
 impl MiniCC {
@@ -318,7 +321,7 @@ impl MiniCC {
             }
             self.consume(); // ;
             
-            fields.insert(fname, StructField { offset: current_offset, _size: _field_size });
+            fields.insert(fname, StructField { offset: current_offset, size: _field_size });
             current_offset += _field_size;
         }
         self.consume(); // }
@@ -331,14 +334,16 @@ impl MiniCC {
         self.consume(); // Type
         while self.peek() == Token::Mul { self.consume(); }
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
-        // Array global?
+        
         let mut size = 8;
+        let mut is_arr = false;
         if self.peek() == Token::LBracket {
             self.consume(); 
             if let Token::Num(n) = self.consume() { size = n as usize * 8; } 
             self.consume();
+            is_arr = true;
         }
-        self.globals.insert(name, self.global_offset);
+        self.globals.insert(name, GlobalInfo { offset: self.global_offset, is_array: is_arr });
         self.global_offset += size;
         self.consume(); // ;
     }
@@ -475,7 +480,7 @@ impl MiniCC {
                     match lhs {
                         Expr::MemberAccess(_, off) => {
                             if let Some(info) = self.locals.get(&s) { self.out.push_str(&format!("LLOAD {}\n", info.offset)); }
-                            else if let Some(&addr) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\nMLOAD\n", addr)); }
+                            else if let Some(info) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\nMLOAD\n", info.offset)); }
                             self.out.push_str(&format!("PUSH {}\nADD\n", off));
                         },
                         Expr::ArrayAccess(_, idx, stride) => {
@@ -489,8 +494,12 @@ impl MiniCC {
                                     // Pointer
                                     self.out.push_str(&format!("LLOAD {}\n", info.offset));
                                 }
-                            } else if let Some(&addr) = self.globals.get(&s) {
-                                self.out.push_str(&format!("PUSH {}\n", addr));
+                            } else if let Some(info) = self.globals.get(&s) {
+                                if info.is_array {
+                                    self.out.push_str(&format!("PUSH {}\n", info.offset)); // Global Array Base Address
+                                } else {
+                                    self.out.push_str(&format!("PUSH {}\nMLOAD\n", info.offset)); // Global Pointer Value
+                                }
                             }
                             self.gen_expr(*idx);
                             self.out.push_str(&format!("PUSH {}\nMUL\nADD\n", stride));
@@ -506,8 +515,8 @@ impl MiniCC {
                     self.gen_expr(expr);
                     if let Some(info) = self.locals.get(&s) {
                         self.out.push_str(&format!("LSTORE {}\n", info.offset));
-                    } else if let Some(&addr) = self.globals.get(&s) {
-                        self.out.push_str(&format!("PUSH {}\n", addr)); 
+                    } else if let Some(info) = self.globals.get(&s) {
+                        self.out.push_str(&format!("PUSH {}\n", info.offset)); 
                         self.out.push_str("MSTORE\n");
                     }
                     self.consume(); // ;
@@ -557,10 +566,12 @@ impl MiniCC {
                     } else {
                         self.out.push_str(&format!("LLOAD {}\n", info.offset));
                     }
-                } else if let Some(&addr) = self.globals.get(&s) {
-                    // Global array/var. For array, we return address (addr). For var, we return value (*addr).
-                    // We need global type info! Hack: assume pointer logic for now.
-                    self.out.push_str(&format!("PUSH {}\nMLOAD\n", addr));
+                } else if let Some(info) = self.globals.get(&s) {
+                    if info.is_array {
+                        self.out.push_str(&format!("PUSH {}\n", info.offset)); // Global Array: Return Address (Label)
+                    } else {
+                        self.out.push_str(&format!("PUSH {}\nMLOAD\n", info.offset)); // Global Var: Return Value
+                    }
                 }
             }
             Expr::MemberAccess(base, offset) => {
@@ -576,8 +587,8 @@ impl MiniCC {
                 if let Some(info) = self.locals.get(&s) {
                     self.out.push_str("GETBP\n");
                     self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
-                } else if let Some(&addr) = self.globals.get(&s) {
-                    self.out.push_str(&format!("PUSH {}\n", addr));
+                } else if let Some(info) = self.globals.get(&s) {
+                    self.out.push_str(&format!("PUSH {}\n", info.offset));
                 }
             }
             Expr::Deref(e) => {
