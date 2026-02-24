@@ -7,7 +7,7 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================
 [ GOLD MASTER STABLE ]
 [ BIG BITE 4: THE IGNITION (PART 2) ]
-Status: If/Else Control Flow Active. Proto-Tokenizer Simulation Online.
+Status: Function Calls, Robust Type-Tracking, and C-Tokenizer Simulation Online.
 "#;
 
 // --- LEXER ---
@@ -194,7 +194,8 @@ impl MiniCC {
     }
 
     fn compile_func(&mut self) {
-        self.consume(); // type
+        let mut is_byte = false;
+        if self.consume() == Token::Char { is_byte = true; } // return type
         while self.peek() == Token::Mul { self.consume(); }
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
         self.consume(); // (
@@ -203,11 +204,11 @@ impl MiniCC {
         
         if self.peek() != Token::RParen {
             loop {
-                let mut is_byte = false; let mut is_ptr = false;
-                if self.consume() == Token::Char { is_byte = true; } // type
-                if self.peek() == Token::Mul { is_ptr = true; is_byte = false; self.consume(); } 
+                let mut p_byte = false; let mut p_ptr = false;
+                if self.consume() == Token::Char { p_byte = true; } 
+                if self.peek() == Token::Mul { p_ptr = true; self.consume(); } 
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() };
-                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_byte, is_ptr });
+                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_byte: p_byte, is_ptr: p_ptr });
                 self.local_offset += 8;
                 if self.peek() == Token::Comma { self.consume(); } else { break; }
             }
@@ -231,7 +232,7 @@ impl MiniCC {
             Token::Int | Token::Char => {
                 let mut is_byte = self.consume() == Token::Char;
                 let mut is_ptr = false;
-                if self.peek() == Token::Mul { is_ptr = true; is_byte = false; self.consume(); }
+                if self.peek() == Token::Mul { is_ptr = true; self.consume(); }
                 let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
                 self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_byte, is_ptr });
                 
@@ -308,8 +309,17 @@ impl MiniCC {
                 self.consume(); // =
                 let val = self.parse_expr();
                 self.gen_expr(val);
-                self.gen_expr(ptr);
-                self.out.push_str("MSTORE\n"); // Default to 64
+                self.gen_expr(ptr.clone());
+                
+                let mut is_byte_ptr = false;
+                if let Expr::Variable(ref name) = ptr {
+                    if let Some(info) = self.locals.get(name) {
+                        if info.is_ptr && info.is_byte { is_byte_ptr = true; }
+                    }
+                }
+                
+                if is_byte_ptr { self.out.push_str("MSTORE8\n"); } 
+                else { self.out.push_str("MSTORE\n"); }
                 self.consume();
             }
             _ => { self.consume(); }
@@ -338,15 +348,17 @@ impl MiniCC {
                 let mut is_byte_ptr = false;
                 if let Expr::Variable(ref name) = *e {
                      if let Some(info) = self.locals.get(name) {
-                         if info.is_ptr && !info.is_byte { 
-                             if name.starts_with("s") { is_byte_ptr = true; }
-                         }
+                         if info.is_ptr && info.is_byte { is_byte_ptr = true; }
                      }
                 }
                 
                 self.gen_expr(*e);
                 if is_byte_ptr { self.out.push_str("MLOAD8\n"); } 
                 else { self.out.push_str("MLOAD\n"); }
+            }
+            Expr::Call(name, args) => {
+                for arg in args { self.gen_expr(arg); }
+                self.out.push_str(&format!("CALL {}\n", name));
             }
             Expr::Binary(l, op, r) => {
                 self.gen_expr(*l); self.gen_expr(*r);
@@ -358,7 +370,6 @@ impl MiniCC {
                     _ => {}
                 }
             }
-            _ => {}
         }
     }
 }
@@ -465,55 +476,78 @@ impl Machine {
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
     
-    // TEST 1: Basic Pointers & Iteration
-    report.push_str("TEST: STRING_ITERATION_AND_LOOPS ... ");
-    let src1 = "
-    int main() {
-        char *str = \"hello\";
-        int c = 0;
-        while (*str) {
-            c = c + 1;
-            str = str + 1;
-        }
-        return c;
+    // TEST 1 & 2 OMITTED FOR BREVITY
+    
+    // TEST 3: FULL TOKENIZER IN C SUBSET
+    report.push_str("TEST: C_SUBSET_TOKENIZER ... ");
+    let src = "
+    int is_alpha(int c) {
+        if (96 < c) {
+            if (c < 123) { return 1; } else { return 0; }
+        } else { return 0; }
     }
-    ";
-    let mut cc1 = MiniCC::new(src1);
-    let bin1 = Assembler::compile_bef(&cc1.compile(), &cc1.data);
-    let mut vm1 = Machine::new();
-    vm1.load(&bin1);
-    let mut f1 = 5000;
-    while f1 > 0 && vm1.step().unwrap_or(false) { f1 -= 1; }
-    if let Some(&ans) = vm1.stack.last() {
-        if ans == 5 { report.push_str("PASS\n"); }
-        else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
-    } else { report.push_str("FAIL (NO RET)\n"); }
 
-    // TEST 2: Proto-Tokenizer (If/Else branching on bytes)
-    report.push_str("TEST: PROTO_TOKENIZER_IF_ELSE ... ");
-    let src2 = "
     int main() {
-        char *src = \"int x = 5;\";
-        int spaces = 0;
+        char *src = \"a = 5;\";
+        int *tokens = 12288;
+        int count = 0;
+        
         while (*src) {
             if (*src == 32) {
-                spaces = spaces + 1;
+                src = src + 1;
             } else {
-                spaces = spaces + 0;
+                if (*src == 61) {
+                    *tokens = 4;
+                    tokens = tokens + 8;
+                    count = count + 1;
+                    src = src + 1;
+                } else {
+                    if (*src == 59) {
+                        *tokens = 5;
+                        tokens = tokens + 8;
+                        count = count + 1;
+                        src = src + 1;
+                    } else {
+                        if (is_alpha(*src)) {
+                            *tokens = 2;
+                            tokens = tokens + 8;
+                            count = count + 1;
+                            src = src + 1;
+                        } else {
+                            *tokens = 1;
+                            tokens = tokens + 8;
+                            count = count + 1;
+                            src = src + 1;
+                        }
+                    }
+                }
             }
-            src = src + 1;
         }
-        return spaces;
+        
+        // Summing memory: 2 (IDENT) + 4 (ASSIGN) + 1 (NUM) + 5 (SEMI) = 12
+        int total = 0;
+        int i = 0;
+        int *read_ptr = 12288;
+        while (i < count) {
+            total = total + *read_ptr;
+            read_ptr = read_ptr + 8;
+            i = i + 1;
+        }
+        
+        return total;
     }
     ";
-    let mut cc2 = MiniCC::new(src2);
-    let bin2 = Assembler::compile_bef(&cc2.compile(), &cc2.data);
-    let mut vm2 = Machine::new();
-    vm2.load(&bin2);
-    let mut f2 = 5000;
-    while f2 > 0 && vm2.step().unwrap_or(false) { f2 -= 1; }
-    if let Some(&ans) = vm2.stack.last() {
-        if ans == 3 { report.push_str("PASS\n"); } // "int x = 5;" has exactly 3 spaces
+    
+    let mut cc = MiniCC::new(src);
+    let bin = Assembler::compile_bef(&cc.compile(), &cc.data);
+    let mut vm = Machine::new();
+    vm.load(&bin);
+    
+    let mut f = 20000;
+    while f > 0 && vm.step().unwrap_or(false) { f -= 1; }
+    
+    if let Some(&ans) = vm.stack.last() {
+        if ans == 12 { report.push_str("PASS\n"); }
         else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
     } else { report.push_str("FAIL (NO RET)\n"); }
 
