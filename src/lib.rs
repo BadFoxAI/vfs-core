@@ -247,16 +247,26 @@ impl MiniCC {
         self.consume(); while self.peek() == Token::Mul { self.consume(); }
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
         self.consume(); self.out.push_str(&format!("{}:\n", name)); self.locals.clear(); self.local_offset = 0;
+        
+        // Collect parameter offsets
+        let mut param_offsets = Vec::new();
         if self.peek() != Token::RParen { 
             loop { 
                 self.consume(); while self.peek() == Token::Mul { self.consume(); } 
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() }; 
                 self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_array: false }); 
+                param_offsets.push(self.local_offset);
                 self.local_offset += 8; 
                 if self.peek() == Token::Comma { self.consume(); } else { break; } 
             } 
         }
         self.consume(); self.consume(); 
+        
+        // Generate Function Prologue: Pop arguments from stack into memory
+        for off in param_offsets.into_iter().rev() {
+            self.out.push_str(&format!("LSTORE {}\n", off));
+        }
+
         while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); } 
         self.consume(); self.out.push_str("PUSH 0\nRET\n");
     }
@@ -498,7 +508,7 @@ pub fn run_suite() -> String {
     while vm_s.step().unwrap_or(false) {}
     if vm_s.stack.last() == Some(&1) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 7: Multi-File Unity Compilation (#include)
+    // Test 7: Multi-File Unity Compilation (#include & Args)
     report.push_str("TEST: PREPROCESSOR_INCLUDE ........ ");
     let mut compiler_vfs = HashMap::new();
     compiler_vfs.insert("math.h".to_string(), "int add(int a, int b) { return a + b; }".to_string());
