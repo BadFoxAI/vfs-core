@@ -333,12 +333,18 @@ impl MiniCC {
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
         // Array global?
         let mut size = 8;
+        let mut is_arr = false;
         if self.peek() == Token::LBracket {
             self.consume(); 
             if let Token::Num(n) = self.consume() { size = n as usize * 8; } 
             self.consume();
+            is_arr = true;
         }
-        self.globals.insert(name, self.global_offset);
+        // Store offset AND array status. We hack the bit into the usize or use a separate map.
+        // For minimal changes, we will assume Global Offset < 1MB. We use high bit for "is_array"?
+        // No, let's keep it simple: If size > 8, it's an array.
+        self.globals.insert(name, self.global_offset); 
+        // We need to track global types. For now, we infer: if using [idx], we treat as ptr.
         self.global_offset += size;
         self.consume(); // ;
     }
