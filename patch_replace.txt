@@ -3,6 +3,6 @@ pub const SYSTEM_STATUS: &str = "\
 DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
-[ ERA 2: THE INDUSTRIAL BRIDGE ]
-Status: Preprocessor [MACRO EXPANSION] Active.
+[ ERA 2: TCC BOOTSTRAP ]
+Status: Preparing Preprocessor for Unity Builds [#include].
 ";

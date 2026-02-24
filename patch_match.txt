@@ -3,6 +3,6 @@ pub const SYSTEM_STATUS: &str = "\
 DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
-[ ERA 2: THE INDUSTRIAL BRIDGE ]
-Status: Compiler Fix [GLOBAL ARRAY TYPE TRACKING] Active.
+[ ERA 3: THE DECEPTION LAYER ]
+Status: POSIX Shim [LIBC INITIALIZATION] Active.
 ";

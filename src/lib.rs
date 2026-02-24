@@ -6,8 +6,8 @@ pub const SYSTEM_STATUS: &str = "\
 DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
-[ ERA 3: THE DECEPTION LAYER ]
-Status: POSIX Shim [LIBC INITIALIZATION] Active.
+[ ERA 2: TCC BOOTSTRAP ]
+Status: Preparing Preprocessor for Unity Builds [#include].
 ";
 
 // --- PREPROCESSOR ---
