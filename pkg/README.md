@@ -37,3 +37,5 @@ The platform is the VFS, the ABI, and the runtime contract. Everything else is s
 - **Phase 6.1**: Ported the *Loading Dock* `MiniCC` frontend. The system can now parse standard minimal `C` syntax and compile it directly into the deterministic internal ABI.
 
 - **Phase 6.2**: Implemented the POSIX CRT emulation layer. Mapped `<stdio.h>` functions like `putchar` to VM Syscall 4 (STDOUT), enabling standard C I/O.
+
+- **Branding Update**: System renamed to DRE (Deterministic Runtime Environment).

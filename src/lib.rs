@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 pub const SYSTEM_STATUS: &str = r#"
 ================================================================================
-BILLET // DETERMINISTIC EXECUTION ENVIRONMENT
+DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================
 [ ARCHITECTURE ]
 Host-Independent VFS + Custom ABI + POSIX Shim.
@@ -241,7 +241,6 @@ pub fn run_suite() -> String {
     report.push_str("TEST: POSIX_CRT_HEADERS ... ");
 
     // Standard C code leveraging stdio.h POSIX hooks
-    // Expected output to stdout: 'O' = 79, 'K' = 75
     let c_src = "
         #include <stdio.h>
         int main ( ) { 
