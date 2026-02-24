@@ -10,14 +10,15 @@
 - [x] Phase 9: TCC Compiler Backend & Self-Hosting.
 - [x] Phase 10: The Deception Layer (POSIX Shim).
 
-## [CURRENT] Era 3: The Threshold
-### Phase 11: The Display Protocol
-- [x] Implement VT100/ANSI escape sequence interpretation.
-- [x] Map `/dev/stdout` VFS output to an interactive frontend UI component.
+## [STABLE] Era 3: The Threshold
+- [x] Phase 11: The Display Protocol (VT100 ANSI processing).
+- [x] Phase 12: The Interactive Terminal.
+    - Host <-> Guest I/O Pipeline mapped.
+    - Native `DRE Shell` and `Nano-lite` editor compiled via MiniCC.
+    - Interactive VFS file editing achieved.
+- [x] **Sovereignty Threshold Reached.**
 
-### Phase 12: The Interactive Terminal
-- [x] Map `/dev/stdin` for full interactive I/O loops.
-- [x] Establish Host <-> Guest keystroke pipeline.
-- [ ] Ingest source code for a stable editor (e.g., `nano` or `kilo`).
-- [ ] Compile Editor using DRE-native TCC.
-- [ ] **Sovereignty Threshold Reached.**
+## [UPCOMING] Era 4: The Network & The Future
+- [ ] Implement VFS snapshots (Save state to LocalStorage/IPFS).
+- [ ] Connect TCP/IP abstractions via Host WebSockets.
+- [ ] Load and compile full Git repository source code.

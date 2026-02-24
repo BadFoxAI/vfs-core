@@ -21,7 +21,6 @@
         async function run() {
             await init();
             
-            // 1. Run static verification suite
             let boot_html = init_shell()
                 .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
                 .replace(/\x1B\[31m/g, '<span style="color:#ff5555; font-weight:bold;">')
@@ -31,54 +30,55 @@
                 .replace(/\n/g, '<br>');
                 
             let term = document.getElementById("term");
-            term.innerHTML = boot_html + "<br><span style='color: yellow;'>[ Establishing Interactive I/O Pipeline... ]</span><br><br>";
+            term.innerHTML = boot_html + "<br><span style='color: yellow;'>[ Initializing DRE Operating Shell... ]</span><br><br>";
             
-            // 2. Boot Interactive VM
             let dre = new DREInstance();
             let screen_buffer = "";
             document.getElementById("mainBody").focus();
             
-            // Capture physical keyboard
+            // Map Host Keyboard -> Guest Stdin
             window.addEventListener('keydown', (e) => {
                 if (e.ctrlKey || e.metaKey || e.altKey) return;
                 if (e.key.length === 1) { dre.send_input(e.key.charCodeAt(0)); e.preventDefault(); }
                 else if (e.key === "Enter") { dre.send_input(13); e.preventDefault(); }
                 else if (e.key === "Backspace") { dre.send_input(8); e.preventDefault(); }
+                else if (e.key === "Escape") { dre.send_input(27); e.preventDefault(); }
             });
             
-            // Render Loop
             function loop() {
-                dre.tick(10000); // Process VM clock cycles
-                let out = dre.read_output(); // Fetch stdout
+                dre.tick(50000); 
+                let out = dre.read_output(); 
                 
                 if (out.length > 0) {
                     for (let i = 0; i < out.length; i++) {
                         if (out[i] === '\b') {
-                            screen_buffer = screen_buffer.slice(0, -1); // Process backspace purely in UI layer
+                            screen_buffer = screen_buffer.slice(0, -1);
                         } else {
                             screen_buffer += out[i];
                         }
                     }
                     
-                    // Handle ANSI Clear Screen
+                    // Interpret "Clear Screen" ANSI
                     if (screen_buffer.includes("\x1B[2J\x1B[H")) {
                         screen_buffer = screen_buffer.split("\x1B[2J\x1B[H").pop();
+                        boot_html = ""; // Erase boot log on first clear
                     }
                     
-                    // Render ANSI Colors
                     let html = screen_buffer
                         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                        .replace(/\x1B\[7m/g, '<span style="background:#ccc; color:#000; font-weight:bold; padding:0 5px;">')
                         .replace(/\x1B\[32m/g, '<span style="color:#55ff55; font-weight:bold;">')
+                        .replace(/\x1B\[33m/g, '<span style="color:#ffff55; font-weight:bold;">')
                         .replace(/\x1B\[36m/g, '<span style="color:#55ffff; font-weight:bold;">')
                         .replace(/\x1B\[0m/g, '</span>')
                         .replace(/\n/g, '<br>');
                         
-                    term.innerHTML = boot_html + "<br>" + html + "<span class='blink'>_</span>";
+                    term.innerHTML = (boot_html ? boot_html + "<br>" : "") + html + "<span class='blink'>_</span>";
                     window.scrollTo(0, document.body.scrollHeight);
                 }
                 requestAnimationFrame(loop);
             }
-            loop(); // Ignite the runtime
+            loop();
         }
         run();
     </script>
