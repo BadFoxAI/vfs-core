@@ -611,7 +611,8 @@ pub struct DREInstance {
 impl DREInstance {
     #[wasm_bindgen(constructor)]
     pub fn new() -> DREInstance {
-        // Strict MiniCC compliant Shell and Editor
+        // Here we inject an actual interactive operating shell and nano-clone written in C.
+        // We strictly hoist ALL local variables to avoid MiniCC stack leakage.
         let src = "
         int strlen(char *s) {
             int len = 0; char *p = s;
@@ -636,15 +637,31 @@ impl DREInstance {
             char *buf = 15000;
             char *line = 16000;
             int pos = 0;
+            int n = 0;
+            int is_enter = 0;
+            int is_bs = 0;
+            char *cur = 0;
+            
+            char *fbuf = 20000;
+            int fpos = 0;
+            int editing = 0;
+            int rn = 0;
+            int b_bs = 0;
+            int fd = 0;
+            char *fcur = 0;
+            
+            char *rbuf = 30000;
+            int bytes = 0;
+            char *end = 0;
 
             puts(\"\\e[2J\\e[H\\e[36mDRE SECURE SHELL\\e[0m \\e[32mv2.0\\e[0m\\n\");
             puts(\"Type 'help' for commands.\\n> \");
 
             while (1) {
-                int n = syscall(2, fd_in, buf, 1);
+                n = syscall(2, fd_in, buf, 1);
                 if (n) {
-                    int is_enter = 0;
-                    int is_bs = 0;
+                    is_enter = 0;
+                    is_bs = 0;
                     if (*buf == 13) { is_enter = 1; }
                     if (*buf == 10) { is_enter = 1; }
                     if (*buf == 8) { is_bs = 1; }
@@ -652,7 +669,7 @@ impl DREInstance {
 
                     if (is_enter) {
                         puts(\"\\n\");
-                        char *cur = line + pos; *cur = 0;
+                        cur = line + pos; *cur = 0;
                         
                         if (streq(line, \"help\")) {
                             puts(\"Commands:\\n  \\e[33mhelp\\e[0m  - Show this menu\\n  \\e[33mclear\\e[0m - Clear screen\\n  \\e[33medit\\e[0m  - Open VFS Editor\\n  \\e[33mread\\e[0m  - Read 'test.txt'\\n\");
@@ -660,19 +677,18 @@ impl DREInstance {
                             puts(\"\\e[2J\\e[H\");
                         } else if (streq(line, \"edit\")) {
                             puts(\"\\e[2J\\e[H\\e[7m DRE VFS EDITOR (Press ESC to save to 'test.txt') \\e[0m\\n\");
-                            char *fbuf = 20000;
-                            int fpos = 0;
-                            int editing = 1;
+                            fpos = 0;
+                            editing = 1;
                             while (editing) {
-                                int rn = syscall(2, fd_in, buf, 1);
+                                rn = syscall(2, fd_in, buf, 1);
                                 if (rn) {
                                     if (*buf == 27) { 
-                                        int fd = syscall(1, \"test.txt\");
+                                        fd = syscall(1, \"test.txt\");
                                         syscall(3, fd, fbuf, fpos);
                                         puts(\"\\n\\e[32m[ Saved to VFS 'test.txt' ]\\e[0m\\n\");
                                         editing = 0;
                                     } else {
-                                        int b_bs = 0;
+                                        b_bs = 0;
                                         if (*buf == 8) { b_bs = 1; }
                                         if (*buf == 127) { b_bs = 1; }
                                         
@@ -683,21 +699,20 @@ impl DREInstance {
                                             }
                                         } else if (*buf == 13) {
                                             puts(\"\\n\");
-                                            char *fcur = fbuf + fpos; *fcur = 10; fpos = fpos + 1;
+                                            fcur = fbuf + fpos; *fcur = 10; fpos = fpos + 1;
                                         } else {
                                             syscall(3, fd_out, buf, 1);
-                                            char *fcur = fbuf + fpos; *fcur = *buf; fpos = fpos + 1;
+                                            fcur = fbuf + fpos; *fcur = *buf; fpos = fpos + 1;
                                         }
                                     }
                                 }
                             }
                         } else if (streq(line, \"read\")) {
-                            int fd = syscall(1, \"test.txt\");
-                            char *rbuf = 30000;
-                            int bytes = syscall(2, fd, rbuf, 1024);
+                            fd = syscall(1, \"test.txt\");
+                            bytes = syscall(2, fd, rbuf, 1024);
                             if (bytes) {
                                 puts(\"\\e[36m--- test.txt ---\\e[0m\\n\");
-                                char *end = rbuf + bytes; *end = 0;
+                                end = rbuf + bytes; *end = 0;
                                 puts(rbuf);
                                 puts(\"\\n\\e[36m----------------\\e[0m\\n\");
                             } else {
@@ -714,7 +729,7 @@ impl DREInstance {
                         if (pos) { puts(\"\\b \\b\"); pos = pos - 1; }
                     } else {
                         syscall(3, fd_out, buf, 1);
-                        char *cur = line + pos; *cur = *buf; pos = pos + 1;
+                        cur = line + pos; *cur = *buf; pos = pos + 1;
                     }
                 }
             }
