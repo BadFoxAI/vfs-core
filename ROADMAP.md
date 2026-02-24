@@ -19,3 +19,4 @@
 ## Resolved Issues Log
 - **WASM Infinite Loop:** Caused by MiniCC lacking scope handling, creating stack leaks in `while` loops. *Fix:* Hoisted variables to function top.
 - **Array Garbage Values:** Caused by `arr[i]` treating `arr` as an l-value value instead of a pointer address. *Fix:* Implemented Array Pointer Decay in `gen_expr`.
+- [x] Phase 16: The POSIX Deception (Memory Management & Strings).
