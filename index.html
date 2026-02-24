@@ -4,7 +4,8 @@
 <body style="background: #111; color: #ccc; font-family: monospace; padding: 2rem;">
     <div id="term">Booting DRE Substrate...</div>
     <script type="module">
-        import init, { init_shell } from './pkg/vfs_core.js';
+        // Added timestamp to force browser to reload the module
+        import init, { init_shell } from './pkg/vfs_core.js?v=' + Date.now();
         async function run() {
             await init();
             let raw_output = init_shell();
