@@ -403,7 +403,7 @@ pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
     let pass_msg = "\x1b[32mPASS\x1b[0m\n";
     
-    // Test 1: Stack Vars (Era 1)
+    // Test 1: Stack Vars
     report.push_str("TEST: COMPILER_STACK_VARS ......... ");
     let mut cc1 = MiniCC::new("int main() { return 118; }");
     let mut vm1 = Machine::new();
@@ -411,7 +411,7 @@ pub fn run_suite() -> String {
     while vm1.step().unwrap_or(false) {}
     if vm1.stack.last() == Some(&118) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 2: Arrays and Nested Structs (Era 2)
+    // Test 2: Arrays and Nested Structs
     report.push_str("TEST: COMPILER_ARRAYS_NESTED ...... ");
     let src_a = "int arr[10]; int main() { arr[0] = 100; arr[1] = 50; return arr[0] + arr[1]; }";
     let mut cc_a = MiniCC::new(src_a);
@@ -420,7 +420,7 @@ pub fn run_suite() -> String {
     while vm_a.step().unwrap_or(false) {}
     if vm_a.stack.last() == Some(&150) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 3: Multi-Pass Forward Declarations (Era 2)
+    // Test 3: Multi-Pass Forward Declarations
     report.push_str("TEST: MULTIPASS_FORWARD_DECLS ..... ");
     let src_f = "int main() { return foo(); } int foo() { return 99; }";
     let mut cc_f = MiniCC::new(src_f);
@@ -429,7 +429,7 @@ pub fn run_suite() -> String {
     while vm_f.step().unwrap_or(false) {}
     if vm_f.stack.last() == Some(&99) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 4: Preprocessor Defines (Era 2/3)
+    // Test 4: Preprocessor Defines
     report.push_str("TEST: PREPROCESSOR_DEFINES ........ ");
     let src_p = "#define MAGIC_NUM 42\nint main() { return MAGIC_NUM; }";
     let mut cc_p = MiniCC::new(src_p);
@@ -438,7 +438,7 @@ pub fn run_suite() -> String {
     while vm_p.step().unwrap_or(false) {}
     if vm_p.stack.last() == Some(&42) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 5: Libc Memory Allocation (Era 3)
+    // Test 5: Libc Memory Allocation
     report.push_str("TEST: LIBC_MALLOC_SBRK ............ ");
     let src_m = "
     #define NULL 0
@@ -455,7 +455,7 @@ pub fn run_suite() -> String {
     while vm_m.step().unwrap_or(false) {}
     if vm_m.stack.last() == Some(&1234) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 6: Pointer Decay Strings (Era 3)
+    // Test 6: Pointer Decay Strings
     report.push_str("TEST: POINTER_DECAY_STRINGS ....... ");
     let src_s = "
     int main() {
