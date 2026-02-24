@@ -7,20 +7,45 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
 [ ERA 2: TCC BOOTSTRAP ]
-Status: Preparing Preprocessor for Unity Builds [#include].
+Status: Preprocessor [RECURSIVE #include] Active.
 ";
 
 // --- PREPROCESSOR ---
-fn preprocess(src: &str) -> String {
+fn preprocess(src: &str, vfs: &HashMap<String, String>, processed_files: &mut Vec<String>) -> String {
     let mut macros = HashMap::new();
     let mut result = Vec::new();
     for line in src.lines() {
         let trimmed = line.trim();
+        
+        // Handle #include
+        if trimmed.starts_with("#include") {
+            let start = trimmed.find(|c| c == '"' || c == '<');
+            let end = trimmed.rfind(|c| c == '"' || c == '>');
+            if let (Some(s), Some(e)) = (start, end) {
+                if s < e {
+                    let filename = &trimmed[s+1..e];
+                    if !processed_files.contains(&filename.to_string()) {
+                        processed_files.push(filename.to_string());
+                        if let Some(file_content) = vfs.get(filename) {
+                            // Recursively preprocess the included file
+                            let included = preprocess(file_content, vfs, processed_files);
+                            result.push(included);
+                        } else {
+                            // Silently ignore missing headers for now (useful for mocking libc)
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Handle #define
         if trimmed.starts_with("#define") {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             if parts.len() >= 3 { macros.insert(parts[1].to_string(), parts[2..].join(" ")); }
             continue;
         }
+
         let mut processed = line.to_string();
         for (name, val) in &macros { processed = processed.replace(name, val); }
         result.push(processed);
@@ -105,9 +130,11 @@ pub struct MiniCC {
 }
 
 impl MiniCC {
-    pub fn new(source: &str) -> Self { 
+    pub fn new(source: &str, host_vfs: &HashMap<String, String>) -> Self { 
+        let mut processed_files = Vec::new();
+        let preprocessed_src = preprocess(source, host_vfs, &mut processed_files);
         Self { 
-            tokens: lex(&preprocess(source)), pos: 0, 
+            tokens: lex(&preprocessed_src), pos: 0, 
             locals: HashMap::new(), local_offset: 0, 
             globals: HashMap::new(), global_offset: 2048, 
             structs: HashMap::new(), label_count: 0, 
@@ -115,7 +142,7 @@ impl MiniCC {
         } 
     }
     
-    fn peek(&self) -> Token { self.tokens[self.pos].clone() }
+    fn peek(&self) -> Token { if self.pos < self.tokens.len() { self.tokens[self.pos].clone() } else { Token::EOF } }
     fn consume(&mut self) -> Token { let t = self.peek(); if t != Token::EOF { self.pos += 1; } t }
     fn new_label(&mut self) -> String { self.label_count += 1; format!("L{}", self.label_count) }
 
@@ -402,10 +429,11 @@ impl Machine {
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
     let pass_msg = "\x1b[32mPASS\x1b[0m\n";
+    let empty_vfs = HashMap::new();
     
     // Test 1: Stack Vars
     report.push_str("TEST: COMPILER_STACK_VARS ......... ");
-    let mut cc1 = MiniCC::new("int main() { return 118; }");
+    let mut cc1 = MiniCC::new("int main() { return 118; }", &empty_vfs);
     let mut vm1 = Machine::new();
     vm1.load(&Assembler::compile_bef(&cc1.compile(), &cc1.data));
     while vm1.step().unwrap_or(false) {}
@@ -414,7 +442,7 @@ pub fn run_suite() -> String {
     // Test 2: Arrays and Nested Structs
     report.push_str("TEST: COMPILER_ARRAYS_NESTED ...... ");
     let src_a = "int arr[10]; int main() { arr[0] = 100; arr[1] = 50; return arr[0] + arr[1]; }";
-    let mut cc_a = MiniCC::new(src_a);
+    let mut cc_a = MiniCC::new(src_a, &empty_vfs);
     let mut vm_a = Machine::new();
     vm_a.load(&Assembler::compile_bef(&cc_a.compile(), &cc_a.data));
     while vm_a.step().unwrap_or(false) {}
@@ -423,7 +451,7 @@ pub fn run_suite() -> String {
     // Test 3: Multi-Pass Forward Declarations
     report.push_str("TEST: MULTIPASS_FORWARD_DECLS ..... ");
     let src_f = "int main() { return foo(); } int foo() { return 99; }";
-    let mut cc_f = MiniCC::new(src_f);
+    let mut cc_f = MiniCC::new(src_f, &empty_vfs);
     let mut vm_f = Machine::new();
     vm_f.load(&Assembler::compile_bef(&cc_f.compile(), &cc_f.data));
     while vm_f.step().unwrap_or(false) {}
@@ -432,7 +460,7 @@ pub fn run_suite() -> String {
     // Test 4: Preprocessor Defines
     report.push_str("TEST: PREPROCESSOR_DEFINES ........ ");
     let src_p = "#define MAGIC_NUM 42\nint main() { return MAGIC_NUM; }";
-    let mut cc_p = MiniCC::new(src_p);
+    let mut cc_p = MiniCC::new(src_p, &empty_vfs);
     let mut vm_p = Machine::new();
     vm_p.load(&Assembler::compile_bef(&cc_p.compile(), &cc_p.data));
     while vm_p.step().unwrap_or(false) {}
@@ -449,7 +477,7 @@ pub fn run_suite() -> String {
         return *ptr;
     }
     ";
-    let mut cc_m = MiniCC::new(src_m);
+    let mut cc_m = MiniCC::new(src_m, &empty_vfs);
     let mut vm_m = Machine::new();
     vm_m.load(&Assembler::compile_bef(&cc_m.compile(), &cc_m.data));
     while vm_m.step().unwrap_or(false) {}
@@ -464,11 +492,25 @@ pub fn run_suite() -> String {
         return 0;
     }
     ";
-    let mut cc_s = MiniCC::new(src_s);
+    let mut cc_s = MiniCC::new(src_s, &empty_vfs);
     let mut vm_s = Machine::new();
     vm_s.load(&Assembler::compile_bef(&cc_s.compile(), &cc_s.data));
     while vm_s.step().unwrap_or(false) {}
     if vm_s.stack.last() == Some(&1) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
+
+    // Test 7: Multi-File Unity Compilation (#include)
+    report.push_str("TEST: PREPROCESSOR_INCLUDE ........ ");
+    let mut compiler_vfs = HashMap::new();
+    compiler_vfs.insert("math.h".to_string(), "int add(int a, int b) { return a + b; }".to_string());
+    let src_inc = "
+    #include \"math.h\"
+    int main() { return add(10, 5); }
+    ";
+    let mut cc_inc = MiniCC::new(src_inc, &compiler_vfs);
+    let mut vm_inc = Machine::new();
+    vm_inc.load(&Assembler::compile_bef(&cc_inc.compile(), &cc_inc.data));
+    while vm_inc.step().unwrap_or(false) {}
+    if vm_inc.stack.last() == Some(&15) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
     report
 }
