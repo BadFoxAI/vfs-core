@@ -320,6 +320,18 @@ impl MiniCC {
                     let info = self.locals.get(&s).unwrap();
                     self.out.push_str(&format!("LSTORE {}\n", info.offset));
                     self.consume(); // ;
+                } else if self.peek() == Token::LParen {
+                    self.consume(); // (
+                    let mut args = Vec::new();
+                    if self.peek() != Token::RParen {
+                        loop {
+                            args.push(self.parse_expr());
+                            if self.peek() == Token::Comma { self.consume(); } else { break; }
+                        }
+                    }
+                    self.consume(); // )
+                    self.gen_expr(Expr::Call(s, args));
+                    self.consume(); // ;
                 }
             }
             Token::Mul => {
