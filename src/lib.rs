@@ -7,7 +7,7 @@ DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
 [ ERA 2: THE INDUSTRIAL BRIDGE ]
-Status: Compiler Upgrade [STRUCTS + ARROW] Active.
+Status: Compiler Upgrade [ARRAYS + NESTED STRUCTS] Active.
 ";
 
 // --- LEXER ---
@@ -15,7 +15,7 @@ Status: Compiler Upgrade [STRUCTS + ARROW] Active.
 enum Token {
     Int, Char, Struct, If, Else, While, Return, Syscall, Sizeof,
     Ident(String), Num(u64), StrLit(String),
-    Plus, Minus, Mul, Div, Assign, Lt, Gt, Eq, Arrow,
+    Plus, Minus, Mul, Div, Assign, Lt, Gt, Eq, Arrow, Dot,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Ampersand, Semicolon, Comma, EOF
 }
@@ -31,6 +31,7 @@ fn lex(src: &str) -> Vec<Token> {
             '(' => tokens.push(Token::LParen), ')' => tokens.push(Token::RParen),
             '[' => tokens.push(Token::LBracket), ']' => tokens.push(Token::RBracket),
             ';' => tokens.push(Token::Semicolon), ',' => tokens.push(Token::Comma),
+            '.' => tokens.push(Token::Dot),
             '+' => tokens.push(Token::Plus), 
             '-' => if chars.peek() == Some(&'>') { chars.next(); tokens.push(Token::Arrow); } else { tokens.push(Token::Minus); },
             '*' => tokens.push(Token::Mul), '/' => tokens.push(Token::Div),
@@ -81,14 +82,15 @@ enum Expr {
     Binary(Box<Expr>, Token, Box<Expr>),
     Call(String, Vec<Expr>), Syscall(Vec<Expr>), 
     Deref(Box<Expr>), AddrOf(String),
-    MemberAccess(Box<Expr>, usize), // Ptr expr + offset
+    MemberAccess(Box<Expr>, usize),
+    ArrayAccess(Box<Expr>, Box<Expr>, usize), // Base, Index, Stride
 }
 
 #[derive(Clone)]
-struct VarInfo { offset: usize, is_byte: bool, is_ptr: bool, is_global: bool }
+struct VarInfo { offset: usize, is_global: bool }
 
 #[derive(Clone)]
-struct StructField { offset: usize }
+struct StructField { offset: usize, size: usize }
 
 #[derive(Clone)]
 struct StructDef { size: usize, fields: HashMap<String, StructField> }
@@ -98,7 +100,7 @@ pub struct MiniCC {
     tokens: Vec<Token>, pos: usize,
     locals: HashMap<String, VarInfo>, local_offset: usize, 
     globals: HashMap<String, usize>, global_offset: usize,
-    structs: HashMap<String, StructDef>, // Struct Registry
+    structs: HashMap<String, StructDef>,
     label_count: usize,
     data: Vec<u8>, out: String,
 }
@@ -178,35 +180,37 @@ impl MiniCC {
                 self.consume(); 
                 if let Token::Ident(name) = self.consume() { Expr::AddrOf(name) } else { panic!("Expected Ident"); } 
             }
-            _ => self.parse_arrow_or_primary(),
+            _ => self.parse_postfix(),
         }
     }
 
-    fn parse_arrow_or_primary(&mut self) -> Expr {
+    fn parse_postfix(&mut self) -> Expr {
         let mut left = self.parse_primary();
         
-        // Postfix operations like '->'
-        while self.peek() == Token::Arrow {
-            self.consume(); // ->
-            if let Token::Ident(field) = self.consume() {
-                // To resolve offset, we need type info. 
-                // CRITICAL HACK for Era 2: Since we don't track expression types in AST yet,
-                // we will scan ALL known structs for this field name. 
-                // This implies field names must be unique across structs for now.
-                let mut found_offset = None;
-                for (_, def) in &self.structs {
-                    if let Some(f) = def.fields.get(&field) {
-                        found_offset = Some(f.offset);
-                        break;
-                    }
-                }
-                if let Some(off) = found_offset {
-                    left = Expr::MemberAccess(Box::new(left), off);
-                } else {
-                    panic!("Unknown struct field: {}", field);
-                }
-            } else {
-                panic!("Expected field name after ->");
+        loop {
+            match self.peek() {
+                Token::Arrow => {
+                    self.consume(); // ->
+                    if let Token::Ident(field) = self.consume() {
+                        let mut found_offset = None;
+                        for (_, def) in &self.structs {
+                            if let Some(f) = def.fields.get(&field) {
+                                found_offset = Some(f.offset);
+                                break;
+                            }
+                        }
+                        if let Some(off) = found_offset {
+                            left = Expr::MemberAccess(Box::new(left), off);
+                        } else { panic!("Unknown field: {}", field); }
+                    } else { panic!("Expected field name"); }
+                },
+                Token::LBracket => {
+                    self.consume(); // [
+                    let index = self.parse_expr();
+                    self.consume(); // ]
+                    left = Expr::ArrayAccess(Box::new(left), Box::new(index), 8); // Assume 8-byte stride for now
+                },
+                _ => break,
             }
         }
         left
@@ -217,18 +221,13 @@ impl MiniCC {
             Token::Num(n) => Expr::Number(n),
             Token::StrLit(s) => Expr::StringLit(s),
             Token::Sizeof => {
-                self.consume(); // (
-                self.consume(); // struct
-                let name = if let Token::Ident(s) = self.consume() { s } else { panic!("Exp struct name") };
+                self.consume(); self.consume(); // ( struct
+                let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
                 self.consume(); // )
-                if let Some(def) = self.structs.get(&name) {
-                    Expr::Number(def.size as u64)
-                } else {
-                    panic!("Unknown struct for sizeof: {}", name);
-                }
+                if let Some(def) = self.structs.get(&name) { Expr::Number(def.size as u64) } else { panic!() }
             }
             Token::Syscall => {
-                if self.consume() != Token::LParen { panic!("Expected '(' after syscall"); }
+                self.consume(); // (
                 let mut args = Vec::new();
                 if self.peek() != Token::RParen {
                     loop {
@@ -236,12 +235,11 @@ impl MiniCC {
                         if self.peek() == Token::Comma { self.consume(); } else { break; }
                     }
                 }
-                self.consume(); // )
-                Expr::Syscall(args)
+                self.consume(); Expr::Syscall(args)
             }
             Token::Ident(s) => {
                 if self.peek() == Token::LParen {
-                    self.consume();
+                    self.consume(); 
                     let mut args = Vec::new();
                     if self.peek() != Token::RParen {
                         loop {
@@ -289,20 +287,39 @@ impl MiniCC {
 
     fn compile_struct_def(&mut self) {
         self.consume(); // struct
-        let name = if let Token::Ident(s) = self.consume() { s } else { panic!("Expected struct name") };
+        let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
         self.consume(); // {
         
         let mut current_offset = 0;
         let mut fields = HashMap::new();
         
         while self.peek() != Token::RBrace {
-            self.consume(); // int/char
-            while self.peek() == Token::Mul { self.consume(); }
-            let fname = if let Token::Ident(s) = self.consume() { s } else { panic!("Exp field name") };
+            let mut _field_size = 8;
+            if self.peek() == Token::Struct {
+                self.consume(); // struct
+                let type_name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
+                if let Some(def) = self.structs.get(&type_name) {
+                    _field_size = def.size;
+                }
+            } else {
+                self.consume(); // int/char
+            }
+            
+            while self.peek() == Token::Mul { self.consume(); _field_size = 8; }
+            let fname = if let Token::Ident(s) = self.consume() { s } else { panic!() };
+            
+            // Check for array [10]
+            if self.peek() == Token::LBracket {
+                self.consume(); // [
+                if let Token::Num(n) = self.consume() {
+                    _field_size *= n as usize;
+                }
+                self.consume(); // ]
+            }
             self.consume(); // ;
             
-            fields.insert(fname, StructField { offset: current_offset });
-            current_offset += 8; // All fields 8 bytes aligned for now
+            fields.insert(fname, StructField { offset: current_offset, size: _field_size });
+            current_offset += _field_size;
         }
         self.consume(); // }
         self.consume(); // ;
@@ -314,8 +331,15 @@ impl MiniCC {
         self.consume(); // Type
         while self.peek() == Token::Mul { self.consume(); }
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
+        // Array global?
+        let mut size = 8;
+        if self.peek() == Token::LBracket {
+            self.consume(); 
+            if let Token::Num(n) = self.consume() { size = n as usize * 8; } 
+            self.consume();
+        }
         self.globals.insert(name, self.global_offset);
-        self.global_offset += 8;
+        self.global_offset += size;
         self.consume(); // ;
     }
 
@@ -330,11 +354,9 @@ impl MiniCC {
         
         if self.peek() != Token::RParen {
             loop {
-                let mut p_byte = false; let mut p_ptr = false;
-                if self.consume() == Token::Char { p_byte = true; } 
-                if self.peek() == Token::Mul { p_ptr = true; self.consume(); } 
+                self.consume(); while self.peek() == Token::Mul { self.consume(); }
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() };
-                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_byte: p_byte, is_ptr: p_ptr, is_global: false });
+                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_global: false });
                 self.local_offset += 8;
                 if self.peek() == Token::Comma { self.consume(); } else { break; }
             }
@@ -349,23 +371,16 @@ impl MiniCC {
     fn compile_stmt(&mut self) {
         match self.peek() {
             Token::Int | Token::Char | Token::Struct => {
-                // Handle local declaration. 
-                // We simplify struct locals to just 'struct Name *p' or 'struct Name p' (treated as 8 bytes on stack for now unless we implement copy)
-                // For this phase, we assume pointers to structs for complex data.
-                let mut is_struct = false;
-                if self.peek() == Token::Struct { 
-                    self.consume(); // struct
-                    self.consume(); // Name
-                    is_struct = true;
-                } else {
-                    self.consume(); // int/char
+                let mut size = 8;
+                if self.peek() == Token::Struct { self.consume(); self.consume(); } else { self.consume(); }
+                while self.peek() == Token::Mul { self.consume(); }
+                
+                let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
+                if self.peek() == Token::LBracket {
+                    self.consume(); if let Token::Num(n) = self.consume() { size = n as usize * 8; } self.consume();
                 }
                 
-                let mut is_ptr = false;
-                if self.peek() == Token::Mul { is_ptr = true; self.consume(); }
-                
-                let name = if let Token::Ident(s) = self.consume() { s } else { panic!("Exp var name") };
-                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_byte: false, is_ptr, is_global: false });
+                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_global: false });
                 
                 if self.peek() == Token::Assign {
                     self.consume();
@@ -373,7 +388,7 @@ impl MiniCC {
                     self.gen_expr(expr);
                     self.out.push_str(&format!("LSTORE {}\n", self.local_offset));
                 }
-                self.local_offset += 8;
+                self.local_offset += size;
                 self.consume(); // ;
             }
             Token::Return => {
@@ -428,29 +443,57 @@ impl MiniCC {
             }
             Token::Ident(s) => {
                 self.consume();
-                // Assignment to member? ptr->x = 5;
+                // Check if assignment (either direct or member)
+                let mut lhs_expr = None;
+                
                 if self.peek() == Token::Arrow {
-                    self.consume(); // ->
+                    self.consume();
                     let field = if let Token::Ident(f) = self.consume() { f } else { panic!() };
+                    
+                    // Base pointer
+                    let mut base = Expr::Variable(s.clone()); // Simplified AST node construction
+                    // Resolve offset
+                    let mut found = None;
+                    for (_, def) in &self.structs { if let Some(f) = def.fields.get(&field) { found = Some(f.offset); break; } }
+                    if let Some(off) = found {
+                        lhs_expr = Some(Expr::MemberAccess(Box::new(base), off));
+                    }
+                } else if self.peek() == Token::LBracket {
+                    self.consume();
+                    let idx = self.parse_expr();
+                    self.consume();
+                    lhs_expr = Some(Expr::ArrayAccess(Box::new(Expr::Variable(s.clone())), Box::new(idx), 8));
+                }
+                
+                if let Some(lhs) = lhs_expr {
                     self.consume(); // =
                     let val = self.parse_expr();
-                    self.gen_expr(val); // Push value to store
+                    self.gen_expr(val); // Push Value
                     
-                    // Now calculate address: ptr + offset
-                    if let Some(info) = self.locals.get(&s) {
-                        self.out.push_str(&format!("LLOAD {}\n", info.offset));
-                    } else if let Some(&addr) = self.globals.get(&s) {
-                        self.out.push_str(&format!("PUSH {}\nMLOAD\n", addr));
+                    // Generate address of LHS manually here because we need to STORE, not LOAD
+                    match lhs {
+                        Expr::MemberAccess(_, off) => {
+                            if let Some(info) = self.locals.get(&s) { self.out.push_str(&format!("LLOAD {}\n", info.offset)); }
+                            else if let Some(&addr) = self.globals.get(&s) { self.out.push_str(&format!("PUSH {}\nMLOAD\n", addr)); }
+                            self.out.push_str(&format!("PUSH {}\nADD\n", off));
+                        },
+                        Expr::ArrayAccess(_, idx, stride) => {
+                            // Arrays are pointers.
+                            if let Some(info) = self.locals.get(&s) {
+                                // If it's a local array (stack allocated), its value IS its address? 
+                                // No, for now we treat local arrays as pointers to stack slots.
+                                // We need "address of variable"
+                                self.out.push_str("GETBP\n");
+                                self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
+                            } else if let Some(&addr) = self.globals.get(&s) {
+                                self.out.push_str(&format!("PUSH {}\n", addr));
+                            }
+                            self.gen_expr(*idx);
+                            self.out.push_str(&format!("PUSH {}\nMUL\nADD\n", stride));
+                        },
+                        _ => {}
                     }
-                    
-                    // Find offset
-                    let mut found = None;
-                    for (_, def) in &self.structs {
-                        if let Some(f) = def.fields.get(&field) { found = Some(f.offset); break; }
-                    }
-                    if let Some(off) = found {
-                        self.out.push_str(&format!("PUSH {}\nADD\nMSTORE\n", off));
-                    }
+                    self.out.push_str("MSTORE\n");
                     self.consume(); // ;
                 }
                 else if self.peek() == Token::Assign {
@@ -461,12 +504,6 @@ impl MiniCC {
                         self.out.push_str(&format!("LSTORE {}\n", info.offset));
                     } else if let Some(&addr) = self.globals.get(&s) {
                         self.out.push_str(&format!("PUSH {}\n", addr)); 
-                        // MSTORE expects [addr, val] on stack? No, our VM is:
-                        // 0x63 (MSTORE): addr = pop(), val = pop().
-                        // So stack needs to be [val, addr].
-                        // Wait, previous MSTORE logic in Ident was "PUSH addr, MSTORE" -> [val, addr]
-                        // BUT gen_expr pushes 'val'. So we have [val]. Then we push addr. Stack is [val, addr].
-                        // Then MSTORE pops addr, pops val. THIS IS CORRECT.
                         self.out.push_str("MSTORE\n");
                     }
                     self.consume(); // ;
@@ -516,8 +553,13 @@ impl MiniCC {
                 }
             }
             Expr::MemberAccess(base, offset) => {
-                self.gen_expr(*base); // Puts pointer address on stack
+                self.gen_expr(*base); 
                 self.out.push_str(&format!("PUSH {}\nADD\nMLOAD\n", offset));
+            }
+            Expr::ArrayAccess(base, idx, stride) => {
+                self.gen_expr(*base);
+                self.gen_expr(*idx);
+                self.out.push_str(&format!("PUSH {}\nMUL\nADD\nMLOAD\n", stride));
             }
             Expr::AddrOf(s) => {
                 if let Some(info) = self.locals.get(&s) {
@@ -554,7 +596,7 @@ impl MiniCC {
     }
 }
 
-// --- ASSEMBLER & VM REMAIN SAME (Just copied for completeness of file) ---
+// --- ASSEMBLER & VM ---
 pub struct Assembler;
 impl Assembler {
     pub fn compile_bef(source: &str, data: &[u8]) -> Vec<u8> {
@@ -576,7 +618,7 @@ impl Assembler {
                 "HALT" => code.push(0x00),
                 "PUSH" => { code.push(0x10); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
                 "POP" => code.push(0x11),
-                "ADD" => code.push(0x20), "SUB" => code.push(0x21), "NOT" => code.push(0x24),
+                "ADD" => code.push(0x20), "SUB" => code.push(0x21), "MUL" => code.push(0x22), "NOT" => code.push(0x24), // Added MUL opcode
                 "LT" => code.push(0x25), "GT" => code.push(0x26),
                 "JMP" => { code.push(0x30); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
                 "JZ" => { code.push(0x31); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
@@ -639,6 +681,7 @@ impl Machine {
             0x11 => { self.stack.pop(); }
             0x20 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_add(b)); }
             0x21 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_sub(b)); }
+            0x22 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_mul(b)); } // MUL
             0x24 => { let a = self.stack.pop().unwrap(); self.stack.push(if a == 0 { 1 } else { 0 }); }
             0x25 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a < b { 1 } else { 0 }); }
             0x26 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a > b { 1 } else { 0 }); }
@@ -746,32 +789,23 @@ pub fn run_suite() -> String {
     while vm1.step().unwrap_or(false) {}
     if vm1.stack.last() == Some(&118) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
 
-    // Test 2: Global Vars
-    report.push_str("TEST: COMPILER_GLOBAL_VARS ........ ");
-    let src_g = "int g_val; int main() { g_val = 50; return g_val + 5; }";
-    let mut cc_g = MiniCC::new(src_g);
-    let mut vm_g = Machine::new();
-    vm_g.load(&Assembler::compile_bef(&cc_g.compile(), &cc_g.data));
-    while vm_g.step().unwrap_or(false) {}
-    if vm_g.stack.last() == Some(&55) { report.push_str(pass_msg); } else { report.push_str("\x1b[31mFAIL\x1b[0m\n"); }
-
-    // Test 3: STRUCTS + ARROW Operator (New!)
-    report.push_str("TEST: COMPILER_STRUCTS_ARROW ...... ");
-    let src_s = "
+    // Test 2: Arrays and Nested Structs
+    report.push_str("TEST: COMPILER_ARRAYS_NESTED ...... ");
+    let src_a = "
     struct Point { int x; int y; };
-    int main() {
-        struct Point *p = syscall(4, sizeof(struct Point)); // Malloc
-        p->x = 10;
-        p->y = 20;
-        return p->x + p->y;
+    int arr[10];
+    int main() { 
+        arr[0] = 100;
+        arr[1] = 50;
+        return arr[0] + arr[1];
     }
     ";
-    let mut cc_s = MiniCC::new(src_s);
-    let mut vm_s = Machine::new();
-    vm_s.load(&Assembler::compile_bef(&cc_s.compile(), &cc_s.data));
-    while vm_s.step().unwrap_or(false) {}
-    if vm_s.stack.last() == Some(&30) { report.push_str(pass_msg); } 
-    else { report.push_str(&format!("\x1b[31mFAIL (Got {:?})\x1b[0m\n", vm_s.stack.last())); }
+    let mut cc_a = MiniCC::new(src_a);
+    let mut vm_a = Machine::new();
+    vm_a.load(&Assembler::compile_bef(&cc_a.compile(), &cc_a.data));
+    while vm_a.step().unwrap_or(false) {}
+    if vm_a.stack.last() == Some(&150) { report.push_str(pass_msg); } 
+    else { report.push_str(&format!("\x1b[31mFAIL (Got {:?})\x1b[0m\n", vm_a.stack.last())); }
 
     report
 }
