@@ -611,8 +611,7 @@ pub struct DREInstance {
 impl DREInstance {
     #[wasm_bindgen(constructor)]
     pub fn new() -> DREInstance {
-        // Here we inject an actual interactive operating shell and nano-clone written in C.
-        // We strictly hoist ALL local variables to avoid MiniCC stack leakage.
+        // Paranoid Safety Shell: No new stack vars in loop, direct buf checks
         let src = "
         int strlen(char *s) {
             int len = 0; char *p = s;
@@ -638,37 +637,30 @@ impl DREInstance {
             char *line = 16000;
             int pos = 0;
             int n = 0;
-            int is_enter = 0;
-            int is_bs = 0;
             char *cur = 0;
             
             char *fbuf = 20000;
             int fpos = 0;
             int editing = 0;
             int rn = 0;
-            int b_bs = 0;
             int fd = 0;
             char *fcur = 0;
             
             char *rbuf = 30000;
             int bytes = 0;
             char *end = 0;
+            char *newline = 40000;
+            *newline = 10;
+            *(newline + 1) = 0;
 
-            puts(\"\\e[2J\\e[H\\e[36mDRE SECURE SHELL\\e[0m \\e[32mv2.0\\e[0m\\n\");
+            puts(\"\\e[2J\\e[H\\e[36mDRE SECURE SHELL\\e[0m \\e[32mv2.1\\e[0m\\n\");
             puts(\"Type 'help' for commands.\\n> \");
 
             while (1) {
                 n = syscall(2, fd_in, buf, 1);
                 if (n) {
-                    is_enter = 0;
-                    is_bs = 0;
-                    if (*buf == 13) { is_enter = 1; }
-                    if (*buf == 10) { is_enter = 1; }
-                    if (*buf == 8) { is_bs = 1; }
-                    if (*buf == 127) { is_bs = 1; }
-
-                    if (is_enter) {
-                        puts(\"\\n\");
+                    if (*buf == 13) {
+                        puts(newline);
                         cur = line + pos; *cur = 0;
                         
                         if (streq(line, \"help\")) {
@@ -687,23 +679,17 @@ impl DREInstance {
                                         syscall(3, fd, fbuf, fpos);
                                         puts(\"\\n\\e[32m[ Saved to VFS 'test.txt' ]\\e[0m\\n\");
                                         editing = 0;
-                                    } else {
-                                        b_bs = 0;
-                                        if (*buf == 8) { b_bs = 1; }
-                                        if (*buf == 127) { b_bs = 1; }
-                                        
-                                        if (b_bs) {
-                                            if (fpos) {
-                                                puts(\"\\b \\b\");
-                                                fpos = fpos - 1;
-                                            }
-                                        } else if (*buf == 13) {
-                                            puts(\"\\n\");
-                                            fcur = fbuf + fpos; *fcur = 10; fpos = fpos + 1;
-                                        } else {
-                                            syscall(3, fd_out, buf, 1);
-                                            fcur = fbuf + fpos; *fcur = *buf; fpos = fpos + 1;
+                                    } else if (*buf == 8) {
+                                        if (fpos) {
+                                            puts(\"\\b \\b\");
+                                            fpos = fpos - 1;
                                         }
+                                    } else if (*buf == 13) {
+                                        puts(newline);
+                                        fcur = fbuf + fpos; *fcur = 10; fpos = fpos + 1;
+                                    } else {
+                                        syscall(3, fd_out, buf, 1);
+                                        fcur = fbuf + fpos; *fcur = *buf; fpos = fpos + 1;
                                     }
                                 }
                             }
@@ -714,18 +700,19 @@ impl DREInstance {
                                 puts(\"\\e[36m--- test.txt ---\\e[0m\\n\");
                                 end = rbuf + bytes; *end = 0;
                                 puts(rbuf);
-                                puts(\"\\n\\e[36m----------------\\e[0m\\n\");
+                                puts(newline);
+                                puts(\"\\e[36m----------------\\e[0m\\n\");
                             } else {
                                 puts(\"\\e[31mFile 'test.txt' is empty.\\e[0m\\n\");
                             }
                         } else {
                             if (pos) {
-                                puts(\"Unknown command: \"); puts(line); puts(\"\\n\");
+                                puts(\"Unknown command: \"); puts(line); puts(newline);
                             }
                         }
                         pos = 0;
                         puts(\"> \");
-                    } else if (is_bs) {
+                    } else if (*buf == 8) {
                         if (pos) { puts(\"\\b \\b\"); pos = pos - 1; }
                     } else {
                         syscall(3, fd_out, buf, 1);
