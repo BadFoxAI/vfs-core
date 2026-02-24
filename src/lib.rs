@@ -288,14 +288,21 @@ impl Machine {
                 if id == 1 { 
                     let v = self.stack.pop().unwrap(); self.vfs.insert("out.dat".into(), v.to_le_bytes().to_vec()); 
                 } else if id == 2 {
+                    // Syscall 2 (VFS Read)
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let buf_ptr = self.stack.pop().unwrap() as usize;
                     let mut fname = String::new(); let mut p = fname_ptr;
                     while self.read_u8(p)? != 0 { fname.push(self.read_u8(p)? as char); p += 1; }
-                    if let Some(data) = self.vfs.get(&fname) {
-                        for (idx, &b) in data.iter().enumerate() { self.write_u8(buf_ptr + idx, b)?; }
+                    
+                    // FIX: Clone data first to avoid double borrow
+                    let data_opt = self.vfs.get(&fname).cloned();
+                    if let Some(data) = data_opt {
+                        for (idx, b) in data.iter().enumerate() { 
+                            self.write_u8(buf_ptr + idx, *b)?; 
+                        }
                     }
                 } else if id == 3 {
+                    // Syscall 3 (VFS Write)
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let buf_ptr = self.stack.pop().unwrap() as usize;
                     let len = self.stack.pop().unwrap() as usize;
@@ -309,10 +316,14 @@ impl Machine {
                     if let Some(buf) = self.vfs.get_mut("stdout.txt") { buf.push(c); } 
                     else { self.vfs.insert("stdout.txt".into(), vec![c]); }
                 } else if id == 5 {
+                    // Syscall 5 (EXEC)
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let mut fname = String::new(); let mut p = fname_ptr;
                     while self.read_u8(p)? != 0 { fname.push(self.read_u8(p)? as char); p += 1; }
-                    if let Some(data) = self.vfs.get(&fname) {
+                    
+                    // FIX: Clone data first
+                    let data_opt = self.vfs.get(&fname).cloned();
+                    if let Some(data) = data_opt {
                         let size = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
                         if size > self.memory.len() { return Err("EXEC Fail: Binary too large".into()); }
                         self.memory[0..size].copy_from_slice(&data[16..16+size]);
