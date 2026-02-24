@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub const SYSTEM_STATUS: &str = r#"
 ================================================================================
@@ -12,7 +12,8 @@ Host-Independent VFS + Custom ABI + POSIX Shim.
 [x] PHASE 1-4: CORE SYSTEM COMPLETE.
 [~] PHASE 5: BOOTSTRAP TOOLCHAIN (Language v0)
     [x] 5.1 Implement Robust v0 Compiler (Stream Parser).
-    [ ] 5.2 Implement Function support.
+    [x] 5.2 Implement Function support (CALL/RET).
+    [ ] 5.3 Implement Memory Pointers.
 
 UNIT TEST SUITE:
 "#;
@@ -20,13 +21,14 @@ UNIT TEST SUITE:
 // --- STREAM-BASED V0 COMPILER ---
 pub struct V0Compiler {
     locals: HashMap<String, usize>,
+    functions: HashSet<String>,
     local_offset: usize,
     label_count: usize,
 }
 
 impl V0Compiler {
     pub fn new() -> Self {
-        Self { locals: HashMap::new(), local_offset: 0, label_count: 0 }
+        Self { locals: HashMap::new(), functions: HashSet::new(), local_offset: 0, label_count: 0 }
     }
 
     pub fn compile(&mut self, source: &str) -> Result<String, String> {
@@ -48,6 +50,48 @@ impl V0Compiler {
                     self.locals.insert(name.clone(), self.local_offset);
                     out.push_str(&format!("PUSH {} LSTORE {}\n", val, self.local_offset));
                     self.local_offset += 8;
+                    while tokens[i] != ";" { i += 1; }
+                }
+                "fn" => {
+                    let name = tokens[i+1].clone();
+                    self.functions.insert(name.clone());
+                    let skip_lbl = format!("L_SKIP_{}", self.label_count);
+                    self.label_count += 1;
+                    out.push_str(&format!("JMP {}\n{}:\n", skip_lbl, name));
+                    i += 2;
+                    while tokens[i] != "{" { i += 1; }
+                    i += 1; // {
+                    while tokens[i] != "}" {
+                        if self.locals.contains_key(&tokens[i]) {
+                            let var_name = tokens[i].clone();
+                            let off = *self.locals.get(&var_name).unwrap();
+                            i += 2; // x =
+                            out.push_str(&self.gen_load(&tokens[i]));
+                            out.push_str(&self.gen_load(&tokens[i+2]));
+                            out.push_str("ADD\n");
+                            out.push_str(&format!("LSTORE {}\n", off));
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "syscall" {
+                            i += 2;
+                            let id = &tokens[i]; i += 2;
+                            let val = &tokens[i];
+                            out.push_str(&self.gen_load(val));
+                            out.push_str(&self.gen_load(id));
+                            out.push_str("SYSCALL\n");
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "call" {
+                            let fname = &tokens[i+1];
+                            out.push_str(&format!("CALL {}\n", fname));
+                            while tokens[i] != ";" { i += 1; }
+                        }
+                        i += 1;
+                    }
+                    out.push_str("RET\n");
+                    out.push_str(&format!("{}:\n", skip_lbl));
+                }
+                "call" => {
+                    let fname = &tokens[i+1];
+                    out.push_str(&format!("CALL {}\n", fname));
                     while tokens[i] != ";" { i += 1; }
                 }
                 "while" => {
@@ -86,6 +130,10 @@ impl V0Compiler {
                             out.push_str(&self.gen_load(val));
                             out.push_str(&self.gen_load(id));
                             out.push_str("SYSCALL\n");
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "call" {
+                            let fname = &tokens[i+1];
+                            out.push_str(&format!("CALL {}\n", fname));
                             while tokens[i] != ";" { i += 1; }
                         }
                         i += 1;
@@ -128,7 +176,7 @@ impl Assembler {
                 labels.insert(tokens[i].trim_end_matches(':').to_string(), addr);
             } else {
                 addr += match tokens[i] {
-                    "PUSH" | "JMP" | "JZ" | "LLOAD" | "LSTORE" => { i += 1; 9 },
+                    "PUSH" | "JMP" | "JZ" | "LLOAD" | "LSTORE" | "CALL" => { i += 1; 9 },
                     _ => 1,
                 };
             }
@@ -146,6 +194,8 @@ impl Assembler {
                 "JZ" => { code.push(0x41); i+=1; code.extend_from_slice(&(*labels.get(tokens[i]).unwrap() as u64).to_le_bytes()); }
                 "LLOAD" => { code.push(0x60); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
                 "LSTORE" => { code.push(0x61); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
+                "CALL" => { code.push(0x80); i+=1; code.extend_from_slice(&(*labels.get(tokens[i]).unwrap() as u64).to_le_bytes()); }
+                "RET" => code.push(0x81),
                 "SYSCALL" => code.push(0xF0),
                 t if t.ends_with(':') => {}
                 _ => {}
@@ -163,6 +213,7 @@ impl Assembler {
 // --- VM ---
 pub struct Machine {
     pub stack: Vec<u64>,
+    pub call_stack: Vec<usize>,
     pub memory: Vec<u8>,
     pub ip: usize,
     pub bp: usize,
@@ -170,7 +221,7 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn new() -> Self { Self { stack: vec![], memory: vec![0; 8192], ip: 0, bp: 4096, vfs: HashMap::new() } }
+    pub fn new() -> Self { Self { stack: vec![], call_stack: vec![], memory: vec![0; 8192], ip: 0, bp: 4096, vfs: HashMap::new() } }
     pub fn load(&mut self, data: &[u8]) {
         let size = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
         self.memory[0..size].copy_from_slice(&data[16..16+size]);
@@ -201,6 +252,14 @@ impl Machine {
                 let v = self.stack.pop().unwrap();
                 self.memory[self.bp+off..self.bp+off+8].copy_from_slice(&v.to_le_bytes());
             }
+            0x80 => {
+                let t = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; 
+                self.call_stack.push(self.ip + 8);
+                self.ip = t;
+            }
+            0x81 => {
+                self.ip = self.call_stack.pop().unwrap();
+            }
             0xF0 => { 
                 let id = self.stack.pop().unwrap(); 
                 if id == 1 { 
@@ -216,9 +275,10 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
-    report.push_str("TEST: V0_PIPELINE_STABILITY ... ");
+    report.push_str("TEST: V0_FUNCTION_CALLS ... ");
 
-    let src = "var i = 0 ; while ( i < 5 ) { i = i + 1 ; } syscall ( 1 , i ) ; HALT";
+    // We verify function calls inside loops incrementing the same global variable context
+    let src = "var i = 0 ; fn add_one ( ) { i = i + 1 ; } while ( i < 5 ) { call add_one ; } syscall ( 1 , i ) ; HALT";
     let mut v0 = V0Compiler::new();
     let asm = v0.compile(src).unwrap();
     let bin = Assembler::compile_bef(&asm);

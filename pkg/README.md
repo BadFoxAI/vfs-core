@@ -23,3 +23,6 @@ The platform is the VFS, the ABI, and the runtime contract. Everything else is s
 
 ## Deployment
 **WASM Shell:** [vfs-core.netlify.app](https://vfs-core.netlify.app)
+
+## Progress Log
+- **Phase 5.2**: Added  and  opcodes, Call Stack, and  subroutine compilation to the First Mover toolchain.
