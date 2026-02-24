@@ -6,14 +6,16 @@
 - [x] Phase 8: Hardening (Bounds checking & Gas metering).
 - [x] Big Bite 4: Sovereignty Achieved (The loop is closed).
 
-## [CURRENT] Era 2: The Industrial Bridge (Compiler Hardening)
+## [CURRENT] Era 2: The Industrial Bridge
 - [x] Phase 9: TCC Compiler Backend & Self-Hosting.
 - [x] Phase 10: The Deception Layer (POSIX Shim).
-- [ ] **Phase 13: Compiler Upgrades (Globals, Structs, Arrays).**
-    - [x] Global Variables (Data Segment).
-    - [ ] Struct definitions.
-    - [ ] Multi-pass compilation.
+- [x] Phase 13: Compiler Upgrades (Structs, Arrays, Globals).
 
 ## [UPCOMING] Era 3: The Threshold
-- [ ] Re-attempt Interactive Shell once Compiler is Industrial-grade.
-- [ ] Compile real world tools (Nano/TCC).
+- [ ] **Phase 14: The Multi-Pass Compiler (Forward Declarations).**
+- [ ] **Phase 15: The Preprocessor (Macros/#include).**
+- [ ] Re-attempt Interactive Shell with Industrial Compiler.
+
+## Resolved Issues Log
+- **WASM Infinite Loop:** Caused by MiniCC lacking scope handling, creating stack leaks in `while` loops. *Fix:* Hoisted variables to function top.
+- **Array Garbage Values:** Caused by `arr[i]` treating `arr` as an l-value value instead of a pointer address. *Fix:* Implemented Array Pointer Decay in `gen_expr`.

@@ -87,10 +87,10 @@ enum Expr {
 }
 
 #[derive(Clone)]
-struct VarInfo { offset: usize, is_array: bool, _is_global: bool } // Added is_array
+struct VarInfo { offset: usize, is_array: bool } // Added is_array
 
 #[derive(Clone)]
-struct StructField { offset: usize, size: usize }
+struct StructField { offset: usize, _size: usize }
 
 #[derive(Clone)]
 struct StructDef { size: usize, fields: HashMap<String, StructField> }
@@ -101,8 +101,8 @@ pub struct MiniCC {
     locals: HashMap<String, VarInfo>, local_offset: usize, 
     globals: HashMap<String, usize>, global_offset: usize,
     structs: HashMap<String, StructDef>,
-    label_count: usize,
     data: Vec<u8>, out: String,
+    label_count: usize,
 }
 
 impl MiniCC {
@@ -318,7 +318,7 @@ impl MiniCC {
             }
             self.consume(); // ;
             
-            fields.insert(fname, StructField { offset: current_offset, size: _field_size });
+            fields.insert(fname, StructField { offset: current_offset, _size: _field_size });
             current_offset += _field_size;
         }
         self.consume(); // }
@@ -356,7 +356,7 @@ impl MiniCC {
             loop {
                 self.consume(); while self.peek() == Token::Mul { self.consume(); }
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() };
-                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_array: false, _is_global: false });
+                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_array: false });
                 self.local_offset += 8;
                 if self.peek() == Token::Comma { self.consume(); } else { break; }
             }
@@ -382,7 +382,7 @@ impl MiniCC {
                     is_arr = true;
                 }
                 
-                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_array: is_arr, _is_global: false });
+                self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_array: is_arr });
                 
                 if self.peek() == Token::Assign {
                     self.consume();
