@@ -15,7 +15,7 @@ Status: Interactive Terminal Session [ONLINE].
 enum Token {
     Int, Char, If, Else, While, Return, Syscall,
     Ident(String), Num(u64), StrLit(String),
-    Plus, Minus, Mul, Div, Assign, Lt, Eq,
+    Plus, Minus, Mul, Div, Assign, Lt, Gt, Eq, // Added Gt
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Ampersand, Semicolon, Comma, EOF
 }
@@ -33,7 +33,9 @@ fn lex(src: &str) -> Vec<Token> {
             ';' => tokens.push(Token::Semicolon), ',' => tokens.push(Token::Comma),
             '+' => tokens.push(Token::Plus), '-' => tokens.push(Token::Minus),
             '*' => tokens.push(Token::Mul), '/' => tokens.push(Token::Div),
-            '&' => tokens.push(Token::Ampersand), '<' => tokens.push(Token::Lt),
+            '&' => tokens.push(Token::Ampersand), 
+            '<' => tokens.push(Token::Lt), 
+            '>' => tokens.push(Token::Gt), // Added Lexing for >
             '=' => if chars.peek() == Some(&'=') { chars.next(); tokens.push(Token::Eq); } else { tokens.push(Token::Assign); },
             '"' => {
                 let mut s = String::new();
@@ -130,9 +132,14 @@ impl MiniCC {
     
     fn parse_rel(&mut self) -> Expr {
         let mut left = self.parse_sum();
-        if self.peek() == Token::Lt {
-            self.consume();
-            left = Expr::Binary(Box::new(left), Token::Lt, Box::new(self.parse_sum()));
+        loop {
+            match self.peek() {
+                Token::Lt | Token::Gt => { // Added GT
+                    let op = self.consume();
+                    left = Expr::Binary(Box::new(left), op, Box::new(self.parse_sum()));
+                }
+                _ => break,
+            }
         }
         left
     }
@@ -323,6 +330,7 @@ impl MiniCC {
             Token::Syscall => {
                 let expr = self.parse_expr();
                 self.gen_expr(expr);
+                self.out.push_str("POP\n"); // Discard return value to prevent stack leak
                 self.consume(); // ;
             }
             Token::Ident(s) => {
@@ -345,6 +353,7 @@ impl MiniCC {
                     }
                     self.consume(); // )
                     self.gen_expr(Expr::Call(s, args));
+                    self.out.push_str("POP\n"); // Discard return value to prevent stack leak
                     self.consume(); // ;
                 }
             }
@@ -416,6 +425,7 @@ impl MiniCC {
                     Token::Minus => self.out.push_str("SUB\n"),
                     Token::Eq => { self.out.push_str("SUB\n"); self.out.push_str("NOT\n"); } 
                     Token::Lt => self.out.push_str("LT\n"),
+                    Token::Gt => self.out.push_str("GT\n"), // Added GT
                     _ => {}
                 }
             }
@@ -434,7 +444,7 @@ impl Assembler {
             if t.ends_with(':') { labels.insert(t.trim_end_matches(':').to_string(), addr); }
             else { addr += match *t { 
                 "PUSH"|"JMP"|"JZ"|"LLOAD"|"LSTORE"|"CALL" => 9, 
-                "HALT"|"ADD"|"SUB"|"MUL"|"DIV"|"LT"|"RET"|"GETBP"|"MLOAD"|"MSTORE"|"MLOAD8"|"MSTORE8"|"NOT"|"SYSCALL" => 1, 
+                "HALT"|"ADD"|"SUB"|"MUL"|"DIV"|"LT"|"GT"|"RET"|"GETBP"|"MLOAD"|"MSTORE"|"MLOAD8"|"MSTORE8"|"NOT"|"SYSCALL"|"POP" => 1, 
                 _ => 0 
             }; }
         }
@@ -444,8 +454,9 @@ impl Assembler {
             match tokens[i] {
                 "HALT" => code.push(0x00),
                 "PUSH" => { code.push(0x10); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
+                "POP" => code.push(0x11), // POP
                 "ADD" => code.push(0x20), "SUB" => code.push(0x21), "NOT" => code.push(0x24),
-                "LT" => code.push(0x25),
+                "LT" => code.push(0x25), "GT" => code.push(0x26), // GT
                 "JMP" => { code.push(0x30); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
                 "JZ" => { code.push(0x31); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
                 "CALL" => { code.push(0x40); i+=1; code.extend_from_slice(&(labels[tokens[i]] as u64).to_le_bytes()); }
@@ -505,10 +516,12 @@ impl Machine {
         match op {
             0x00 => return Ok(false),
             0x10 => { self.stack.push(u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap())); self.ip += 8; }
+            0x11 => { self.stack.pop(); } // POP
             0x20 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_add(b)); }
             0x21 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(a.wrapping_sub(b)); }
             0x24 => { let a = self.stack.pop().unwrap(); self.stack.push(if a == 0 { 1 } else { 0 }); }
             0x25 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a < b { 1 } else { 0 }); }
+            0x26 => { let b = self.stack.pop().unwrap(); let a = self.stack.pop().unwrap(); self.stack.push(if a > b { 1 } else { 0 }); } // GT
             0x30 => { self.ip = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; }
             0x31 => { let dest = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; self.ip += 8; if self.stack.pop().unwrap() == 0 { self.ip = dest; } }
             0x40 => { 
@@ -611,7 +624,7 @@ pub struct DREInstance {
 impl DREInstance {
     #[wasm_bindgen(constructor)]
     pub fn new() -> DREInstance {
-        // Paranoid Safety Shell: No new stack vars in loop, direct buf checks
+        // Robust C Shell with hoisted vars, > 0 checks, and no stack leaks
         let src = "
         int strlen(char *s) {
             int len = 0; char *p = s;
@@ -653,12 +666,12 @@ impl DREInstance {
             *newline = 10;
             *(newline + 1) = 0;
 
-            puts(\"\\e[2J\\e[H\\e[36mDRE SECURE SHELL\\e[0m \\e[32mv2.1\\e[0m\\n\");
+            puts(\"\\e[2J\\e[H\\e[36mDRE SECURE SHELL\\e[0m \\e[32mv2.2\\e[0m\\n\");
             puts(\"Type 'help' for commands.\\n> \");
 
             while (1) {
                 n = syscall(2, fd_in, buf, 1);
-                if (n) {
+                if (n > 0) {
                     if (*buf == 13) {
                         puts(newline);
                         cur = line + pos; *cur = 0;
@@ -673,14 +686,14 @@ impl DREInstance {
                             editing = 1;
                             while (editing) {
                                 rn = syscall(2, fd_in, buf, 1);
-                                if (rn) {
+                                if (rn > 0) {
                                     if (*buf == 27) { 
                                         fd = syscall(1, \"test.txt\");
                                         syscall(3, fd, fbuf, fpos);
                                         puts(\"\\n\\e[32m[ Saved to VFS 'test.txt' ]\\e[0m\\n\");
                                         editing = 0;
                                     } else if (*buf == 8) {
-                                        if (fpos) {
+                                        if (fpos > 0) {
                                             puts(\"\\b \\b\");
                                             fpos = fpos - 1;
                                         }
@@ -696,7 +709,7 @@ impl DREInstance {
                         } else if (streq(line, \"read\")) {
                             fd = syscall(1, \"test.txt\");
                             bytes = syscall(2, fd, rbuf, 1024);
-                            if (bytes) {
+                            if (bytes > 0) {
                                 puts(\"\\e[36m--- test.txt ---\\e[0m\\n\");
                                 end = rbuf + bytes; *end = 0;
                                 puts(rbuf);
@@ -706,14 +719,14 @@ impl DREInstance {
                                 puts(\"\\e[31mFile 'test.txt' is empty.\\e[0m\\n\");
                             }
                         } else {
-                            if (pos) {
+                            if (pos > 0) {
                                 puts(\"Unknown command: \"); puts(line); puts(newline);
                             }
                         }
                         pos = 0;
                         puts(\"> \");
                     } else if (*buf == 8) {
-                        if (pos) { puts(\"\\b \\b\"); pos = pos - 1; }
+                        if (pos > 0) { puts(\"\\b \\b\"); pos = pos - 1; }
                     } else {
                         syscall(3, fd_out, buf, 1);
                         cur = line + pos; *cur = *buf; pos = pos + 1;
