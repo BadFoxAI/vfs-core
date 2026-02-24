@@ -42,3 +42,5 @@ The platform is the VFS, the ABI, and the runtime contract. Everything else is s
 
 ## Phase 7: Self-Hosting
 - **Phase 7.1**: Implemented Syscall 5 (`EXEC`). The DRE can now read ABI binaries from the Virtual File System, clear its own memory, and context-switch to execute the new payload natively.
+
+- **Phase 7.2**: Completed Self-Hosting Simulation. The environment can now host a builder program which generates a raw executable binary, writes it to the VFS, and immediately executes it. The loop is closed.

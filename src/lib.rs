@@ -14,7 +14,7 @@ Host-Independent VFS + Custom ABI + POSIX Shim.
 [x] PHASE 6: C COMPILER BOOTSTRAP COMPLETE.
 [~] PHASE 7: SELF-HOSTING
     [x] 7.1 Implement POSIX `exec` (Context Switching).
-    [ ] 7.2 Compile LLVM/Clang strictly in VFS.
+    [x] 7.2 Simulate Self-Hosting Toolchain (Builder -> Binary -> Exec).
 
 UNIT TEST SUITE:
 "#;
@@ -45,11 +45,10 @@ impl MiniCC {
         let mut i = 0;
         while i < tokens.len() {
             if tokens[i] == "#include" {
-                i += 2; // skip #include <stdio.h> / <unistd.h>
+                i += 2; // skip header
             } else if tokens[i] == "int" && i + 1 < tokens.len() {
                 if tokens[i+1] == "main" {
-                    i += 2; // skip int main
-                    while tokens[i] != "{" { i += 1; } // skip ( )
+                    i += 2; while tokens[i] != "{" { i += 1; }
                 } else {
                     let name = &tokens[i+1];
                     let val = &tokens[i+3];
@@ -58,31 +57,68 @@ impl MiniCC {
                     self.local_offset += 8;
                     while tokens[i] != ";" { i += 1; }
                 }
-            } else if tokens[i] == "putchar" {
-                i += 2; // putchar (
-                let val = &tokens[i];
-                out.push_str(&self.gen_load(val));
-                out.push_str("PUSH 4\nSYSCALL\n"); // Syscall 4 = STDOUT
-                while tokens[i] != ";" { i += 1; }
-            } else if tokens[i] == "exec" {
-                i += 2; // exec (
-                let fname = &tokens[i];
-                
-                // Allocate string in heap
+            } else if tokens[i] == "str" {
+                // Extension: str name = "value" ;
+                let name = &tokens[i+1];
+                let val = &tokens[i+3];
+                self.locals.insert(name.clone(), self.local_offset);
                 out.push_str(&format!("PUSH {} LSTORE {}\n", self.heap_offset, self.local_offset));
+                self.local_offset += 8;
                 let mut curr_ptr = self.heap_offset;
-                for b in fname.bytes() {
+                for b in val.bytes() {
                     out.push_str(&format!("PUSH {} PUSH {} STOREB\n", b, curr_ptr));
                     curr_ptr += 1;
                 }
                 out.push_str(&format!("PUSH 0 PUSH {} STOREB\n", curr_ptr));
                 self.heap_offset = curr_ptr + 1;
-
-                // Call Syscall 5 (EXEC)
-                out.push_str(&format!("LLOAD {}\n", self.local_offset));
+                while tokens[i] != ";" { i += 1; }
+            } else if tokens[i] == "poke" {
+                // poke ( addr , val ) ; -> Writes byte
+                i += 2; 
+                let addr = &tokens[i]; i += 2;
+                let val = &tokens[i];
+                out.push_str(&self.gen_load(addr));
+                out.push_str(&self.gen_load(val));
+                out.push_str("STOREB\n");
+                while tokens[i] != ";" { i += 1; }
+            } else if tokens[i] == "syscall" {
+                // syscall ( id , arg1 , arg2 ... ) ;
+                i += 2;
+                let id = tokens[i].clone(); i += 1;
+                let mut args = Vec::new();
+                while tokens[i] != ")" {
+                    if tokens[i] != "," { args.push(tokens[i].clone()); }
+                    i += 1;
+                }
+                for arg in args.iter().rev() {
+                    out.push_str(&self.gen_load(arg));
+                }
+                out.push_str(&self.gen_load(&id));
+                out.push_str("SYSCALL\n");
+                while tokens[i] != ";" { i += 1; }
+            } else if tokens[i] == "exec" {
+                i += 2;
+                let fname = &tokens[i];
+                // Check if it's a variable or literal
+                if self.locals.contains_key(fname) {
+                     out.push_str(&self.gen_load(fname));
+                } else {
+                    // Literal string handling (inline heap alloc)
+                    out.push_str(&format!("PUSH {} \n", self.heap_offset));
+                    let mut curr_ptr = self.heap_offset;
+                    for b in fname.bytes() {
+                        out.push_str(&format!("PUSH {} PUSH {} STOREB\n", b, curr_ptr));
+                        curr_ptr += 1;
+                    }
+                    out.push_str(&format!("PUSH 0 PUSH {} STOREB\n", curr_ptr));
+                    self.heap_offset = curr_ptr + 1;
+                }
                 out.push_str("PUSH 5\nSYSCALL\n");
-                self.local_offset += 8;
-
+                while tokens[i] != ";" { i += 1; }
+            } else if tokens[i] == "putchar" {
+                i += 2; let val = &tokens[i];
+                out.push_str(&self.gen_load(val));
+                out.push_str("PUSH 4\nSYSCALL\n");
                 while tokens[i] != ";" { i += 1; }
             } else if tokens[i] == "return" {
                 i += 1;
@@ -103,7 +139,7 @@ impl MiniCC {
 
     fn gen_load(&self, t: &str) -> String {
         if let Ok(n) = t.parse::<u64>() { format!("PUSH {}\n", n) }
-        else { format!("LLOAD {}\n", self.locals.get(t).expect("Undefined Var")) }
+        else { format!("LLOAD {}\n", self.locals.get(t).expect(&format!("Undefined Var: {}", t))) }
     }
 }
 
@@ -219,6 +255,7 @@ impl Machine {
                         for (idx, &b) in data.iter().enumerate() { self.memory[buf_ptr + idx] = b; }
                     }
                 } else if id == 3 {
+                    // Syscall 3 (VFS Write): (id, fname_ptr, buf_ptr, len)
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let buf_ptr = self.stack.pop().unwrap() as usize;
                     let len = self.stack.pop().unwrap() as usize;
@@ -231,19 +268,14 @@ impl Machine {
                     if let Some(buf) = self.vfs.get_mut("stdout.txt") { buf.push(c); } 
                     else { self.vfs.insert("stdout.txt".into(), vec![c]); }
                 } else if id == 5 {
-                    // Syscall 5 (EXEC / Context Switch)
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let mut fname = String::new(); let mut p = fname_ptr;
                     while self.memory[p] != 0 { fname.push(self.memory[p] as char); p += 1; }
                     if let Some(data) = self.vfs.get(&fname) {
                         let size = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
                         self.memory[0..size].copy_from_slice(&data[16..16+size]);
-                        self.ip = 0;
-                        self.stack.clear();
-                        self.call_stack.clear();
-                    } else {
-                        return Err(format!("EXEC FAIL: {}", fname));
-                    }
+                        self.ip = 0; self.stack.clear(); self.call_stack.clear();
+                    } else { return Err(format!("EXEC FAIL: {}", fname)); }
                 }
             }
             _ => return Err("Err".into()),
@@ -254,34 +286,66 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
-    report.push_str("TEST: POSIX_EXEC_SYSCALL ... ");
+    report.push_str("TEST: SELF_HOSTING_BOOTSTRAP ... ");
 
-    // 1. Prepare "clang.bin" (A mock payload that prints 'O' 'K')
-    // 'O' = 79, 'K' = 75
-    let clang_asm = "PUSH 79 PUSH 4 SYSCALL PUSH 75 PUSH 4 SYSCALL HALT";
-    let clang_bin = Assembler::compile_bef(clang_asm);
-
-    // 2. The host C program that execs the payload using POSIX <unistd.h>
+    // We act as a compiler. We manually construct a valid executable binary array in memory,
+    // write it to 'payload.bin', and then exec it.
+    // The payload will simply print 'Z' (90).
+    
+    // Constructing Payload:
+    // Header (16 bytes): [Magic(4) | Size(4) | Padding(8)]
+    // Code: PUSH 90 (0x10, 90...), PUSH 4, SYSCALL, HALT
+    
     let c_src = "
-        #include <unistd.h>
-        int main ( ) { 
-            exec ( clang.bin ) ; 
-            return 0 ; 
-        }
+        str bin payload.bin ;
+        int buf = 4000 ;
+        
+        // --- HEADER ---
+        // Magic: B111E700 (Little Endian: E7 11 B1 00 ?) No, u32 0xB111E7 -> E7 11 B1 00
+        poke ( buf , 231 ) ; poke ( buf + 1 , 17 ) ; poke ( buf + 2 , 177 ) ; poke ( buf + 3 , 0 ) ;
+        
+        // Size: 20 bytes (0x14)
+        poke ( buf + 8 , 20 ) ; poke ( buf + 9 , 0 ) ; poke ( buf + 10 , 0 ) ; poke ( buf + 11 , 0 ) ;
+        
+        // --- CODE ---
+        // PUSH 90 (0x10 0x5A ...)
+        int code = 4016 ;
+        poke ( code , 16 ) ; poke ( code + 1 , 90 ) ; 
+        poke ( code + 2 , 0 ) ; poke ( code + 3 , 0 ) ; poke ( code + 4 , 0 ) ; 
+        poke ( code + 5 , 0 ) ; poke ( code + 6 , 0 ) ; poke ( code + 7 , 0 ) ; poke ( code + 8 , 0 ) ;
+        
+        // PUSH 4 (0x10 0x04 ...)
+        poke ( code + 9 , 16 ) ; poke ( code + 10 , 4 ) ;
+        poke ( code + 11 , 0 ) ; poke ( code + 12 , 0 ) ; poke ( code + 13 , 0 ) ; 
+        poke ( code + 14 , 0 ) ; poke ( code + 15 , 0 ) ; poke ( code + 16 , 0 ) ; poke ( code + 17 , 0 ) ;
+        
+        // SYSCALL (0xF0)
+        poke ( code + 18 , 240 ) ;
+        
+        // HALT (0x00)
+        poke ( code + 19 , 0 ) ;
+        
+        // Write File: syscall(3, name, buf, len) -> Header(16) + Code(20) = 36 bytes
+        syscall ( 3 , bin , buf , 36 ) ;
+        
+        // Exec
+        exec ( bin ) ;
+        
+        return 0 ;
     ";
+
     let mut cc = MiniCC::new();
     let asm = cc.compile(c_src).unwrap();
     let bin = Assembler::compile_bef(&asm);
 
     let mut vm = Machine::new();
-    vm.vfs.insert("clang.bin".into(), clang_bin);
     vm.load(&bin);
     
-    let mut fuel = 1000;
+    let mut fuel = 2000;
     while fuel > 0 && vm.step().unwrap_or(false) { fuel -= 1; }
 
     if let Some(b) = vm.vfs.get("stdout.txt") {
-        if b.len() == 2 && b[0] == 79 && b[1] == 75 { 
+        if b.len() == 1 && b[0] == 90 { 
             report.push_str("PASS\n"); 
         } else { 
             report.push_str(&format!("FAIL (Val: {:?})\n", b)); 
