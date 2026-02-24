@@ -1,12 +1,26 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export class DREInstance {
+    free(): void;
+    [Symbol.dispose](): void;
+    constructor();
+    read_output(): string;
+    send_input(key: number): void;
+    tick(cycles: number): void;
+}
+
 export function init_shell(): string;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly __wbg_dreinstance_free: (a: number, b: number) => void;
+    readonly dreinstance_new: () => number;
+    readonly dreinstance_read_output: (a: number) => [number, number];
+    readonly dreinstance_send_input: (a: number, b: number) => void;
+    readonly dreinstance_tick: (a: number, b: number) => void;
     readonly init_shell: () => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

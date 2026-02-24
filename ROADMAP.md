@@ -9,17 +9,15 @@
 ## [STABLE] Era 2: The Industrial Bridge
 - [x] Phase 9: TCC Compiler Backend & Self-Hosting.
 - [x] Phase 10: The Deception Layer (POSIX Shim).
-    - File Descriptor VFS mapping.
-    - Sbrk heap mapping.
-    - stdio/stdlib wrappers.
 
 ## [CURRENT] Era 3: The Threshold
 ### Phase 11: The Display Protocol
-- [ ] Implement VT100/ANSI escape sequence interpretation in the Host Shell.
-- [ ] Map `/dev/stdout` VFS output to an interactive frontend UI component.
+- [x] Implement VT100/ANSI escape sequence interpretation.
+- [x] Map `/dev/stdout` VFS output to an interactive frontend UI component.
 
-### Phase 12: The Earned Terminal
-- [ ] Ingest source code for a stable editor (e.g., `nano`).
-- [ ] Compile `nano` using DRE-native TCC.
-- [ ] Execute `nano` and edit a file within the VFS interactively.
+### Phase 12: The Interactive Terminal
+- [x] Map `/dev/stdin` for full interactive I/O loops.
+- [x] Establish Host <-> Guest keystroke pipeline.
+- [ ] Ingest source code for a stable editor (e.g., `nano` or `kilo`).
+- [ ] Compile Editor using DRE-native TCC.
 - [ ] **Sovereignty Threshold Reached.**

@@ -1,5 +1,52 @@
 /* @ts-self-types="./vfs_core.d.ts" */
 
+export class DREInstance {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        DREInstanceFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_dreinstance_free(ptr, 0);
+    }
+    constructor() {
+        const ret = wasm.dreinstance_new();
+        this.__wbg_ptr = ret >>> 0;
+        DREInstanceFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+    /**
+     * @returns {string}
+     */
+    read_output() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.dreinstance_read_output(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @param {number} key
+     */
+    send_input(key) {
+        wasm.dreinstance_send_input(this.__wbg_ptr, key);
+    }
+    /**
+     * @param {number} cycles
+     */
+    tick(cycles) {
+        wasm.dreinstance_tick(this.__wbg_ptr, cycles);
+    }
+}
+if (Symbol.dispose) DREInstance.prototype[Symbol.dispose] = DREInstance.prototype.free;
+
 /**
  * @returns {string}
  */
@@ -19,6 +66,9 @@ export function init_shell() {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg___wbindgen_throw_df03e93053e0f4bc: function(arg0, arg1) {
+            throw new Error(getStringFromWasm0(arg0, arg1));
+        },
         __wbindgen_init_externref_table: function() {
             const table = wasm.__wbindgen_externrefs;
             const offset = table.grow(4);
@@ -34,6 +84,10 @@ function __wbg_get_imports() {
         "./vfs_core_bg.js": import0,
     };
 }
+
+const DREInstanceFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_dreinstance_free(ptr >>> 0, 1));
 
 function getStringFromWasm0(ptr, len) {
     ptr = ptr >>> 0;

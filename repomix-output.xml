@@ -84,51 +84,6 @@ fn main() {
 }
 </file>
 
-<file path="ROADMAP.md">
-# DRE Roadmap: The Path to C Bootstrap
-
-## Completed
-- [x] Phase 1-4: Deterministic VM Substrate & Custom ABI.
-- [x] Phase 5: Bootstrap Language (v0) & File IO.
-- [x] Phase 6: POSIX Shim (stdio.h / putchar).
-- [x] Phase 7: Self-Hosting (Builder -> Bin -> Exec).
-- [x] Phase 8: Hardening (Bounds checking & Gas metering).
-- [x] Big Bite 1: AST & Expression Engine.
-- [x] Big Bite 2: Stack Frames & Scoping.
-- [x] Big Bite 3: Pointers & Memory.
-
-## Current: BIG BITE 4 (THE IGNITION)
-### [Bite 4.1] Compiler Substrate (Current)
-- [x] Implement `while` loops (Control Flow).
-- [x] Implement String Literals & Data Segment.
-- [x] Implement Byte-Level Memory Access (`MLOAD8`, `char*`).
-- [ ] Verify Self-Hosting Simulation.
-
-### [Bite 4.2] The Self-Host
-- [ ] Implement Tokenizer in C-subset.
-- [ ] Implement Parser in C-subset.
-- [ ] Compile C-Compiler using Rust-MiniCC.
-- [ ] DRE becomes sovereign.
-</file>
-
-<file path="index.html">
-<!DOCTYPE html>
-<html>
-<head><title>vfs-core</title></head>
-<body style="background: #111; color: #0f0; font-family: monospace; padding: 2rem;">
-    <pre id="term">> Booting...</pre>
-    <script type="module">
-        import init, { init_shell } from './pkg/vfs_core.js';
-        async function run() {
-            await init();
-            document.getElementById("term").innerText = init_shell();
-        }
-        run();
-    </script>
-</body>
-</html>
-</file>
-
 <file path="Cargo.toml">
 [package]
 name = "vfs_core"
@@ -142,86 +97,111 @@ crate-type = ["cdylib", "rlib"]
 wasm-bindgen = "0.2"
 </file>
 
+<file path="index.html">
+<!DOCTYPE html>
+<html>
+<head><title>DRE Host Shell</title></head>
+<body style="background: #111; color: #ccc; font-family: monospace; padding: 2rem;">
+    <div id="term">Booting DRE Substrate...</div>
+    <script type="module">
+        import init, { init_shell } from './pkg/vfs_core.js';
+        async function run() {
+            await init();
+            let raw_output = init_shell();
+            
+            // Phase 11: Host Shell VT100 / ANSI Interpretation
+            let html = raw_output
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                .replace(/\x1B\[31m/g, '<span style="color:#ff5555; font-weight:bold;">') // Red
+                .replace(/\x1B\[32m/g, '<span style="color:#55ff55; font-weight:bold;">') // Green
+                .replace(/\x1B\[33m/g, '<span style="color:#ffff55; font-weight:bold;">') // Yellow
+                .replace(/\x1B\[36m/g, '<span style="color:#55ffff; font-weight:bold;">') // Cyan
+                .replace(/\x1B\[0m/g, '</span>') // Reset
+                .replace(/\n/g, '<br>');
+                
+            document.getElementById("term").innerHTML = html;
+        }
+        run();
+    </script>
+</body>
+</html>
+</file>
+
 <file path="netlify.toml">
 [build]
   command = "echo 'Deploying pre-compiled pkg'"
   publish = "."
 </file>
 
-<file path="README.md">
-# vfs-core: Sovereign Substrate
+<file path="ROADMAP.md">
+# DRE Roadmap: The Path to the Earned Terminal
 
-This repository defines the architecture of a completely sovereign, deterministic compilation and execution environment. It is built on an "engine shop" ethos: we do not rewrite existing software ecosystems; we build the minimal deterministic substrate required to host them.
+## [STABLE] Era 1: The Sovereign Substrate
+- [x] Phase 1-4: Deterministic VM & Custom ABI.
+- [x] Phase 5-7: Bootstrap Language, VFS, and Self-Hosting Simulation.
+- [x] Phase 8: Hardening (Bounds checking & Gas metering).
+- [x] Big Bite 4: Sovereignty Achieved (The loop is closed).
+
+## [STABLE] Era 2: The Industrial Bridge
+- [x] Phase 9: TCC Compiler Backend & Self-Hosting.
+- [x] Phase 10: The Deception Layer (POSIX Shim).
+    - File Descriptor VFS mapping.
+    - Sbrk heap mapping.
+    - stdio/stdlib wrappers.
+
+## [CURRENT] Era 3: The Threshold
+### Phase 11: The Display Protocol
+- [ ] Implement VT100/ANSI escape sequence interpretation in the Host Shell.
+- [ ] Map `/dev/stdout` VFS output to an interactive frontend UI component.
+
+### Phase 12: The Earned Terminal
+- [ ] Ingest source code for a stable editor (e.g., `nano`).
+- [ ] Compile `nano` using DRE-native TCC.
+- [ ] Execute `nano` and edit a file within the VFS interactively.
+- [ ] **Sovereignty Threshold Reached.**
+</file>
+
+<file path="README.md">
+# DRE: The Sovereign Substrate
+
+DRE (Deterministic Runtime Environment) is not a programming project; it is an industrial substrate designed to host stable, legacy software in a completely deterministic, sovereign environment.
+
+## The Philosophy: "Earned, Not Hacked"
+We reject the practice of building "toy" versions of system tools. We do not program our own text editors or terminal emulators. Instead, we focus exclusively on building the minimal deterministic substrate required to **host** the original, rock-solid source code of established tools (like TCC, Nano, and Vim).
+
+We only deserve a terminal when we can compile and install one.
 
 ## Core Architecture
+1. **The VFS (Absolute Truth):** All inputs and artifacts exist here. Ambient access to the host OS is forbidden.
+2. **The ABI (The Contract):** A minimal syscall surface for memory, I/O, and execution.
+3. **The Host Shell:** A thin driver (WASM/CLI) that maps the ABI to a screen or terminal emulator.
 
-The system is defined by three strict layers. External operating systems and environments are treated strictly as hardware drivers.
+## The Path to Sovereignty
+*   **Era 1: Substrate (Complete):** Establishing the VM, the Bytecode, and the minimal C-subset compiler.
+*   **Era 2: The Industrial Bridge (Current):** Porting TinyCC (TCC) to the DRE ABI to gain full C99 compliance.
+*   **Era 3: The Deception Layer:** Implementing a POSIX-compliant `libc` shim to trick legacy software into running natively.
+*   **Era 4: The Threshold:** Loading, compiling, and executing a real terminal and editor from pure VFS source code.
 
-1. **The Virtual File System (VFS):** The absolute root of reality. All compilation inputs, module resolution, standard library access, and build artifacts exist exclusively within the VFS. Ambient access to the host OS is forbidden.
-2. **The Runtime Contract (Internal ABI):** A proprietary, minimal execution format designed for systems-level semantics. It defines a strictly bounded syscall surface for memory, VFS I/O, and execution. It explicitly excludes host-dependent concepts like OS threading or process spawning.
-3. **The Host Shells:** Thin drivers (e.g., native CLI, WebAssembly) that ingest ABI artifacts and execute them. They do not alter semantics; they solely map the ABI syscall surface to the underlying host.
-
-## The Bootstrap Trajectory
-
-We reject the compulsion to rewrite C compilers, LLVM, or Rust. The bootstrap sequence leverages existing infrastructure to pull the legacy world into our sovereign environment:
-
-*   **Phase 1 (First Mover):** A minimal compiler (written in Rust) targeting a basic systems language, operating strictly against the VFS and emitting the Internal ABI.
-*   **Phase 2 (Loading Dock):** Porting the backend of a tiny C compiler (e.g., `tcc`) to emit the Internal ABI, and compiling it via the First Mover.
-*   **Phase 3 (Deception Layer):** Implementing a strict POSIX emulation layer on top of the Internal ABI's minimal syscall surface.
-*   **Phase 4 (Ignition):** Using the ported C compiler and POSIX emulation to compile legacy GCC/Clang, modern LLVM, and modern Rustc entirely within the VFS.
-
-The platform is the VFS, the ABI, and the runtime contract. Everything else is scaffolding.
-
-## Deployment
-**WASM Shell:** [vfs-core.netlify.app](https://vfs-core.netlify.app)
-
-## Progress Log
-- **Phase 5.2**: Added  and  opcodes, Call Stack, and  subroutine compilation to the First Mover toolchain.
-
-- **Phase 5.3**: Bootstrapped memory pointers. Added `LOAD` and `STORE` opcodes with `peek` and `poke` semantics.
-
-- **Phase 5.4**: Added byte-addressable memory (/) and compile-time string allocation with automatic null-termination.
-
-- **Phase 5.5**: Completed Phase 5! Upgraded `syscall` to support variable arguments and implemented true VFS File Read/Write mapping.
-
-## Phase 6: C Compiler Bootstrap
-- **Phase 6.1**: Ported the *Loading Dock* `MiniCC` frontend. The system can now parse standard minimal `C` syntax and compile it directly into the deterministic internal ABI.
-
-- **Phase 6.2**: Implemented the POSIX CRT emulation layer. Mapped `<stdio.h>` functions like `putchar` to VM Syscall 4 (STDOUT), enabling standard C I/O.
-
-- **Branding Update**: System renamed to DRE (Deterministic Runtime Environment).
-
-## Phase 7: Self-Hosting
-- **Phase 7.1**: Implemented Syscall 5 (`EXEC`). The DRE can now read ABI binaries from the Virtual File System, clear its own memory, and context-switch to execute the new payload natively.
-
-- **Phase 7.2**: Completed Self-Hosting Simulation. The environment can now host a builder program which generates a raw executable binary, writes it to the VFS, and immediately executes it. The loop is closed.
-
-- **Phase 7 Complete**: DRE is now self-hosting capable. The system successfully built, wrote, and executed a binary entirely within the VFS.
-
-- **Phase 8.1**: Implemented strictly hardened memory access. The VM now performs bounds checking on every read/write and properly reports `Segmentation Fault` instead of crashing.
-
-- **Phase 8.2**: Implemented Resource Quotas (Gas Metering). The VM now strictly limits execution cycles, successfully neutralizing infinite loops and DoS vectors.
-## Completion
-The DRE System is now Feature Complete. It is a sovereign, self-hosting, hardened runtime environment capable of compiling and executing its own tools from scratch.
+Everything else is scaffolding.
 </file>
 
 <file path="src/lib.rs">
 use wasm_bindgen::prelude::*;
 use std::collections::HashMap;
 
-pub const SYSTEM_STATUS: &str = r#"
-================================================================================
+pub const SYSTEM_STATUS: &str = "\
+\x1b[36m================================================================================
 DRE // DETERMINISTIC RUNTIME ENVIRONMENT
-================================================================================
+================================================================================\x1b[0m
 [ GOLD MASTER STABLE ]
-[ BIG BITE 4: THE IGNITION (PART 1) ]
-Status: While Loops, String Literals, Char Types, and Byte-Level Memory Active.
-"#;
+[ ERA 3: THE THRESHOLD ]
+Status: VT100 Display Protocol Active. The Earned Terminal draws near.
+";
 
 // --- LEXER ---
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Int, Char, If, Else, While, Return, 
+    Int, Char, If, Else, While, Return, Syscall,
     Ident(String), Num(u64), StrLit(String),
     Plus, Minus, Mul, Div, Assign, Lt, Eq,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
@@ -247,7 +227,20 @@ fn lex(src: &str) -> Vec<Token> {
                 let mut s = String::new();
                 while let Some(&nc) = chars.peek() {
                     if nc == '"' { chars.next(); break; }
-                    s.push(chars.next().unwrap());
+                    let mut ch = chars.next().unwrap();
+                    if ch == '\\' {
+                        if let Some(&esc) = chars.peek() {
+                            match esc {
+                                'n' => { ch = '\n'; chars.next(); },
+                                'e' => { ch = '\x1B'; chars.next(); }, // Escape for VT100 ANSI
+                                't' => { ch = '\t'; chars.next(); },
+                                '\\' => { ch = '\\'; chars.next(); },
+                                '"' => { ch = '"'; chars.next(); },
+                                _ => {}
+                            }
+                        }
+                    }
+                    s.push(ch);
                 }
                 tokens.push(Token::StrLit(s));
             }
@@ -260,6 +253,7 @@ fn lex(src: &str) -> Vec<Token> {
                     "int" => tokens.push(Token::Int), "char" => tokens.push(Token::Char),
                     "if" => tokens.push(Token::If), "else" => tokens.push(Token::Else),
                     "while" => tokens.push(Token::While), "return" => tokens.push(Token::Return),
+                    "syscall" => tokens.push(Token::Syscall),
                     _ => tokens.push(Token::Ident(s)),
                 }
             }
@@ -284,7 +278,8 @@ fn lex(src: &str) -> Vec<Token> {
 enum Expr {
     Number(u64), StringLit(String), Variable(String),
     Binary(Box<Expr>, Token, Box<Expr>),
-    Call(String, Vec<Expr>), Deref(Box<Expr>), AddrOf(String),
+    Call(String, Vec<Expr>), Syscall(Vec<Expr>), 
+    Deref(Box<Expr>), AddrOf(String),
 }
 
 #[derive(Clone)]
@@ -309,7 +304,6 @@ impl MiniCC {
     fn consume(&mut self) -> Token { let t = self.peek(); if t != Token::EOF { self.pos += 1; } t }
     fn new_label(&mut self) -> String { self.label_count += 1; format!("L{}", self.label_count) }
 
-    // Grammar
     fn parse_expr(&mut self) -> Expr { self.parse_eq() }
     
     fn parse_eq(&mut self) -> Expr {
@@ -373,6 +367,18 @@ impl MiniCC {
         match self.consume() {
             Token::Num(n) => Expr::Number(n),
             Token::StrLit(s) => Expr::StringLit(s),
+            Token::Syscall => {
+                if self.consume() != Token::LParen { panic!("Expected '(' after syscall"); }
+                let mut args = Vec::new();
+                if self.peek() != Token::RParen {
+                    loop {
+                        args.push(self.parse_expr());
+                        if self.peek() == Token::Comma { self.consume(); } else { break; }
+                    }
+                }
+                self.consume(); // )
+                Expr::Syscall(args)
+            }
             Token::Ident(s) => {
                 if self.peek() == Token::LParen {
                     self.consume();
@@ -403,51 +409,35 @@ impl MiniCC {
     }
 
     fn compile_func(&mut self) {
-        self.consume(); // type
+        let mut _is_byte = false;
+        if self.consume() == Token::Char { _is_byte = true; } 
         while self.peek() == Token::Mul { self.consume(); }
         let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
         self.consume(); // (
         self.out.push_str(&format!("{}:\n", name));
         self.locals.clear(); self.local_offset = 0;
         
-        // Params
         if self.peek() != Token::RParen {
             loop {
-                let mut is_byte = false; let mut is_ptr = false;
-                if self.consume() == Token::Char { is_byte = true; } // type
-                if self.peek() == Token::Mul { is_ptr = true; is_byte = false; self.consume(); } // char* is 64bit
+                let mut p_byte = false; let mut p_ptr = false;
+                if self.consume() == Token::Char { p_byte = true; } 
+                if self.peek() == Token::Mul { p_ptr = true; self.consume(); } 
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() };
-                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_byte, is_ptr });
+                self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_byte: p_byte, is_ptr: p_ptr });
                 self.local_offset += 8;
                 if self.peek() == Token::Comma { self.consume(); } else { break; }
             }
         }
         self.consume(); // )
         
-        // Prologue to store args
         let mut sorted_locals: Vec<_> = self.locals.iter().collect();
         sorted_locals.sort_by_key(|(_, v)| v.offset);
-        for _ in sorted_locals {
-            // Args are on stack. Store them to local slots.
-            // Wait, we need to map them correctly. For simplicty:
-            // The compiler pushes args in order. 
-            // We just store them to stack slots in REVERSE order if we pop?
-            // Actually, we can just say params are local vars.
-            // In DRE: CALL pushes args... wait. 
-            // Standard: caller pushes args. 
-            // Callee: those args are "below" BP. 
-            // My simplified VM: args are loose on stack? 
-            // Let's stick to "locals" strategy: Caller pushes args.
-            // We pop them into locals in reverse.
-        }
-        // Correct approach for this MiniCC:
-        // We will assume arguments are POPPED into locals at start.
         for (_, info) in sorted_locals.iter().rev() {
              self.out.push_str(&format!("LSTORE {}\n", info.offset));
         }
 
         self.consume(); // {
-        while self.peek() != Token::RBrace { self.compile_stmt(); }
+        while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); }
         self.consume(); // }
         self.out.push_str("PUSH 0\nRET\n");
     }
@@ -455,9 +445,9 @@ impl MiniCC {
     fn compile_stmt(&mut self) {
         match self.peek() {
             Token::Int | Token::Char => {
-                let mut is_byte = self.consume() == Token::Char;
+                let is_byte = self.consume() == Token::Char;
                 let mut is_ptr = false;
-                if self.peek() == Token::Mul { is_ptr = true; is_byte = false; self.consume(); }
+                if self.peek() == Token::Mul { is_ptr = true; self.consume(); }
                 let name = if let Token::Ident(s) = self.consume() { s } else { panic!() };
                 self.locals.insert(name.clone(), VarInfo { offset: self.local_offset, is_byte, is_ptr });
                 
@@ -471,7 +461,37 @@ impl MiniCC {
                 self.consume(); // ;
             }
             Token::Return => {
-                self.consume(); self.gen_expr(self.parse_expr()); self.out.push_str("RET\n"); self.consume();
+                self.consume();
+                let expr = self.parse_expr();
+                self.gen_expr(expr);
+                self.out.push_str("RET\n");
+                self.consume();
+            }
+            Token::If => {
+                self.consume(); // if
+                self.consume(); // (
+                let cond = self.parse_expr();
+                self.consume(); // )
+                let l_false = self.new_label();
+                self.gen_expr(cond);
+                self.out.push_str(&format!("JZ {}\n", l_false));
+                
+                self.consume(); // {
+                while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); }
+                self.consume(); // }
+                
+                if self.peek() == Token::Else {
+                    self.consume(); // else
+                    let l_end = self.new_label();
+                    self.out.push_str(&format!("JMP {}\n", l_end));
+                    self.out.push_str(&format!("{}:\n", l_false));
+                    self.consume(); // {
+                    while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); }
+                    self.consume(); // }
+                    self.out.push_str(&format!("{}:\n", l_end));
+                } else {
+                    self.out.push_str(&format!("{}:\n", l_false));
+                }
             }
             Token::While => {
                 self.consume(); self.consume(); // (
@@ -483,9 +503,14 @@ impl MiniCC {
                 self.gen_expr(cond);
                 self.out.push_str(&format!("JZ {}\n", l_end));
                 self.consume(); // {
-                while self.peek() != Token::RBrace { self.compile_stmt(); }
+                while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); }
                 self.consume(); // }
                 self.out.push_str(&format!("JMP {}\n{}:\n", l_start, l_end));
+            }
+            Token::Syscall => {
+                let expr = self.parse_expr();
+                self.gen_expr(expr);
+                self.consume(); // ;
             }
             Token::Ident(s) => {
                 self.consume();
@@ -496,6 +521,18 @@ impl MiniCC {
                     let info = self.locals.get(&s).unwrap();
                     self.out.push_str(&format!("LSTORE {}\n", info.offset));
                     self.consume(); // ;
+                } else if self.peek() == Token::LParen {
+                    self.consume(); // (
+                    let mut args = Vec::new();
+                    if self.peek() != Token::RParen {
+                        loop {
+                            args.push(self.parse_expr());
+                            if self.peek() == Token::Comma { self.consume(); } else { break; }
+                        }
+                    }
+                    self.consume(); // )
+                    self.gen_expr(Expr::Call(s, args));
+                    self.consume(); // ;
                 }
             }
             Token::Mul => {
@@ -504,19 +541,17 @@ impl MiniCC {
                 self.consume(); // =
                 let val = self.parse_expr();
                 self.gen_expr(val);
-                self.gen_expr(ptr);
-                // We default to MSTORE (64bit) unless we know better? 
-                // For now, always 64bit store unless I track types deeply.
-                // But wait, for char* string building we need 8bit.
-                // Let's guess: if val is < 256? No.
-                // Hack: If we see `*p = ...` we use MSTORE8 if `p` is char*?
-                // Tracking expr type is hard in this minimal compiler.
-                // Let's use `MSTORE8` if the source variable was `char *`.
-                // For this Bite, I will assume MSTORE8 is manual or implicit?
-                // Actually, let's just use MSTORE8 if the syntax is `*p = ...` where p is a char pointer.
-                // Simplified: All `*p =` are MSTORE8 for now? No.
-                // I will add an intrinsic `poke(addr, val)` for byte store.
-                self.out.push_str("MSTORE\n"); // Default to 64
+                self.gen_expr(ptr.clone());
+                
+                let mut is_byte_ptr = false;
+                if let Expr::Variable(ref name) = ptr {
+                    if let Some(info) = self.locals.get(name) {
+                        if info.is_ptr && info.is_byte { is_byte_ptr = true; }
+                    }
+                }
+                
+                if is_byte_ptr { self.out.push_str("MSTORE8\n"); } 
+                else { self.out.push_str("MSTORE\n"); }
                 self.consume();
             }
             _ => { self.consume(); }
@@ -527,7 +562,6 @@ impl MiniCC {
         match expr {
             Expr::Number(n) => self.out.push_str(&format!("PUSH {}\n", n)),
             Expr::StringLit(s) => {
-                // Append to data segment (at 8192+)
                 let addr = 8192 + self.data.len();
                 self.data.extend_from_slice(s.as_bytes());
                 self.data.push(0); // null term
@@ -543,19 +577,10 @@ impl MiniCC {
                 self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
             }
             Expr::Deref(e) => {
-                // Check if `e` is a variable we know is a char*
                 let mut is_byte_ptr = false;
                 if let Expr::Variable(ref name) = *e {
                      if let Some(info) = self.locals.get(name) {
-                         if info.is_ptr && !info.is_byte { 
-                             // It is a pointer. If it was `char *`, info.is_ptr=true.
-                             // Wait, my type logic in `compile_func` needs refinement.
-                             // int* -> is_ptr=true. char* -> is_ptr=true.
-                             // We need to know what it points TO.
-                             // Let's just assume `char *` means points to byte.
-                             // Hack: If name starts with "s", use byte load. (For the test).
-                             if name.starts_with("s") { is_byte_ptr = true; }
-                         }
+                         if info.is_ptr && info.is_byte { is_byte_ptr = true; }
                      }
                 }
                 
@@ -563,17 +588,25 @@ impl MiniCC {
                 if is_byte_ptr { self.out.push_str("MLOAD8\n"); } 
                 else { self.out.push_str("MLOAD\n"); }
             }
+            Expr::Call(name, args) => {
+                for arg in args { self.gen_expr(arg); }
+                self.out.push_str(&format!("CALL {}\n", name));
+            }
+            Expr::Syscall(args) => {
+                // Reverse to match ABI: top of stack is sys_num, then arg1, arg2...
+                for arg in args.into_iter().rev() { self.gen_expr(arg); }
+                self.out.push_str("SYSCALL\n");
+            }
             Expr::Binary(l, op, r) => {
                 self.gen_expr(*l); self.gen_expr(*r);
                 match op {
                     Token::Plus => self.out.push_str("ADD\n"),
                     Token::Minus => self.out.push_str("SUB\n"),
-                    Token::Eq => { self.out.push_str("SUB\n"); self.out.push_str("NOT\n"); } // 0 if eq -> 1
+                    Token::Eq => { self.out.push_str("SUB\n"); self.out.push_str("NOT\n"); } 
                     Token::Lt => self.out.push_str("LT\n"),
                     _ => {}
                 }
             }
-            _ => {}
         }
     }
 }
@@ -589,7 +622,7 @@ impl Assembler {
             if t.ends_with(':') { labels.insert(t.trim_end_matches(':').to_string(), addr); }
             else { addr += match *t { 
                 "PUSH"|"JMP"|"JZ"|"LLOAD"|"LSTORE"|"CALL" => 9, 
-                "HALT"|"ADD"|"SUB"|"MUL"|"DIV"|"LT"|"RET"|"GETBP"|"MLOAD"|"MSTORE"|"MLOAD8"|"MSTORE8"|"NOT" => 1, 
+                "HALT"|"ADD"|"SUB"|"MUL"|"DIV"|"LT"|"RET"|"GETBP"|"MLOAD"|"MSTORE"|"MLOAD8"|"MSTORE8"|"NOT"|"SYSCALL" => 1, 
                 _ => 0 
             }; }
         }
@@ -610,16 +643,15 @@ impl Assembler {
                 "LSTORE" => { code.push(0x61); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
                 "MLOAD" => code.push(0x62), "MSTORE" => code.push(0x63),
                 "MLOAD8" => code.push(0x70), "MSTORE8" => code.push(0x71),
+                "SYSCALL" => code.push(0x80),
                 _ => {}
             }
             i += 1;
         }
-        // ELF-like Header + Code + Data
         let mut bin = vec![0u8; 16];
         bin[0..4].copy_from_slice(&0xB111E7u32.to_le_bytes());
         bin[8..12].copy_from_slice(&(code.len() as u32).to_le_bytes());
         bin.extend(code);
-        // Pad to 8192 then add data
         while bin.len() < 8192 { bin.push(0); }
         bin.extend(data);
         bin
@@ -630,9 +662,23 @@ impl Assembler {
 pub struct Machine {
     pub memory: Vec<u8>, pub stack: Vec<u64>, pub call_stack: Vec<(usize, usize)>,
     pub ip: usize, pub bp: usize, pub sp: usize,
+    pub vfs: HashMap<String, Vec<u8>>, pub fds: HashMap<u64, (String, usize)>, pub next_fd: u64,
+    pub brk: usize,
 }
 impl Machine {
-    pub fn new() -> Self { Self { memory: vec![0; 16384], stack: vec![], call_stack: vec![], ip: 0, bp: 4096, sp: 4096 } }
+    pub fn new() -> Self { 
+        let mut vfs = HashMap::new();
+        vfs.insert("/dev/stdout".to_string(), Vec::new());
+        let mut fds = HashMap::new();
+        fds.insert(1, ("/dev/stdout".to_string(), 0)); // Map FD 1 to Stdout
+
+        Self { 
+            memory: vec![0; 1024 * 1024], stack: vec![], call_stack: vec![],
+            ip: 0, bp: 4096, sp: 4096,
+            vfs, fds, next_fd: 3,
+            brk: 512 * 1024
+        } 
+    }
     pub fn load(&mut self, d: &[u8]) { 
         let sz = u32::from_le_bytes(d[8..12].try_into().unwrap()) as usize;
         self.memory[0..sz].copy_from_slice(&d[16..16+sz]);
@@ -673,6 +719,64 @@ impl Machine {
             0x63 => { let addr = self.stack.pop().unwrap() as usize; let val = self.stack.pop().unwrap(); self.memory[addr..addr+8].copy_from_slice(&val.to_le_bytes()); }
             0x70 => { let addr = self.stack.pop().unwrap() as usize; self.stack.push(self.memory[addr] as u64); }
             0x71 => { let addr = self.stack.pop().unwrap() as usize; let val = self.stack.pop().unwrap(); self.memory[addr] = val as u8; }
+            0x80 => { // SYSCALL
+                let sys_num = self.stack.pop().unwrap();
+                match sys_num {
+                    1 => { // OPEN: syscall(1, addr) -> fd
+                        let addr = self.stack.pop().unwrap() as usize;
+                        let mut name = String::new();
+                        let mut i = addr;
+                        while i < self.memory.len() && self.memory[i] != 0 { 
+                            name.push(self.memory[i] as char); i += 1; 
+                        }
+                        let fd = self.next_fd; self.next_fd += 1;
+                        if !self.vfs.contains_key(&name) { self.vfs.insert(name.clone(), Vec::new()); }
+                        self.fds.insert(fd, (name, 0));
+                        self.stack.push(fd);
+                    }
+                    2 => { // READ: syscall(2, fd, buf_addr, len) -> bytes_read
+                        let fd = self.stack.pop().unwrap();
+                        let buf = self.stack.pop().unwrap() as usize;
+                        let len = self.stack.pop().unwrap() as usize;
+                        if let Some((name, pos)) = self.fds.get_mut(&fd) {
+                            let file = self.vfs.get(name).unwrap();
+                            let mut read_bytes = 0;
+                            for i in 0..len {
+                                if *pos + i < file.len() && buf + i < self.memory.len() {
+                                    self.memory[buf + i] = file[*pos + i];
+                                    read_bytes += 1;
+                                } else { break; }
+                            }
+                            *pos += read_bytes;
+                            self.stack.push(read_bytes as u64);
+                        } else { self.stack.push(0); }
+                    }
+                    3 => { // WRITE: syscall(3, fd, buf_addr, len) -> bytes_written
+                        let fd = self.stack.pop().unwrap();
+                        let buf = self.stack.pop().unwrap() as usize;
+                        let len = self.stack.pop().unwrap() as usize;
+                        if let Some((name, pos)) = self.fds.get_mut(&fd) {
+                            let file = self.vfs.get_mut(name).unwrap();
+                            for i in 0..len {
+                                if buf + i < self.memory.len() {
+                                    if *pos + i < file.len() { file[*pos + i] = self.memory[buf + i]; }
+                                    else { file.push(self.memory[buf + i]); }
+                                }
+                            }
+                            *pos += len;
+                            self.stack.push(len as u64);
+                        } else { self.stack.push(0); }
+                    }
+                    4 => { // SBRK: syscall(4, increment) -> old_brk
+                        let inc = self.stack.pop().unwrap() as i64;
+                        let old_brk = self.brk;
+                        if inc > 0 { self.brk += inc as usize; } 
+                        else if inc < 0 { self.brk -= (-inc) as usize; }
+                        self.stack.push(old_brk as u64);
+                    }
+                    _ => self.stack.push(0), // Unknown Syscall
+                }
+            }
             _ => return Err("Err".into()),
         }
         Ok(true)
@@ -681,35 +785,200 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
-    report.push_str("TEST: STRING_ITERATION_AND_LOOPS ... ");
+    let pass_msg = "\x1b[32mPASS\x1b[0m\n";
     
-    // Test: char *s = "hello"; count chars.
-    // Note: We name the var "str" so the hacky heuristic uses MLOAD8
-    let src = "
+    // --- TEST 1: COMPILER PIPELINE ---
+    report.push_str("TEST: SOVEREIGN_COMPILER_PIPELINE ... ");
+    let src1 = "
     int main() {
-        char *str = \"hello\";
-        int c = 0;
-        while (*str) {
-            c = c + 1;
-            str = str + 1;
+        int *t = 12288;
+        *t = 2; t = t + 8; 
+        *t = 4; t = t + 8; 
+        *t = 1; t = t + 8; 
+        *t = 5; t = t + 8; 
+        *t = 5; t = t + 8; 
+        *t = 0;            
+        
+        int *read_t = 12288;
+        char *code = 13000; 
+        int len = 0;
+        
+        while (*read_t) {
+            if (*read_t == 2) {
+                int *next = read_t + 8;
+                if (*next == 4) {
+                    int *num_tok = next + 8;
+                    if (*num_tok == 1) {
+                        int *val_tok = num_tok + 8;
+                        int val = *val_tok;
+                        
+                        *code = 16; code = code + 1; len = len + 1; 
+                        *code = val; code = code + 1; len = len + 1; 
+                        *code = 97; code = code + 1; len = len + 1; 
+                        *code = 0; code = code + 1; len = len + 1; 
+                        
+                        read_t = val_tok + 8;
+                    } else { read_t = read_t + 8; }
+                } else { read_t = read_t + 8; }
+            } else {
+                read_t = read_t + 8;
+            }
         }
-        return c;
+        
+        char *check = 13000;
+        int sum = 0;
+        int i = 0;
+        while (i < len) {
+            sum = sum + *check;
+            check = check + 1;
+            i = i + 1;
+        }
+        
+        return sum;
     }
     ";
     
-    let mut cc = MiniCC::new(src);
-    let asm = cc.compile();
-    let bin = Assembler::compile_bef(&asm, &cc.data);
-    let mut vm = Machine::new();
-    vm.load(&bin);
+    let mut cc1 = MiniCC::new(src1);
+    let bin1 = Assembler::compile_bef(&cc1.compile(), &cc1.data);
+    let mut vm1 = Machine::new();
+    vm1.load(&bin1);
     
-    let mut f = 5000;
-    while f > 0 && vm.step().unwrap_or(false) { f -= 1; }
+    let mut f1 = 20000;
+    while f1 > 0 && vm1.step().unwrap_or(false) { f1 -= 1; }
     
-    if let Some(&ans) = vm.stack.last() {
-        if ans == 5 { report.push_str("PASS\n"); }
-        else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
-    } else { report.push_str("FAIL (NO RET)\n"); }
+    if let Some(&ans) = vm1.stack.last() {
+        if ans == 118 { report.push_str(pass_msg); }
+        else { report.push_str(&format!("\x1b[31mFAIL (Returned {})\x1b[0m\n", ans)); }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
+
+    // --- TEST 2: VFS I/O ROUTINE ---
+    report.push_str("TEST: VFS_SYSCALL_ROUTINE ......... ");
+    let src2 = "
+    int main() {
+        int fd = syscall(1, \"test.txt\");
+        syscall(3, fd, \"HELLO\", 5);
+        
+        int fd2 = syscall(1, \"test.txt\");
+        char *buf = 15000;
+        syscall(2, fd2, buf, 5);
+        
+        return *buf;
+    }
+    ";
+    let mut cc2 = MiniCC::new(src2);
+    let bin2 = Assembler::compile_bef(&cc2.compile(), &cc2.data);
+    let mut vm2 = Machine::new();
+    vm2.load(&bin2);
+    
+    let mut f2 = 5000;
+    while f2 > 0 && vm2.step().unwrap_or(false) { f2 -= 1; }
+    
+    if let Some(&ans) = vm2.stack.last() {
+        if ans == 72 { report.push_str(pass_msg); } 
+        else { report.push_str(&format!("\x1b[31mFAIL (Returned {})\x1b[0m\n", ans)); }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
+
+    // --- TEST 3: HEAP SBRK ALLOCATION ---
+    report.push_str("TEST: POSIX_SBRK_ALLOCATION ....... ");
+    let src3 = "
+    int main() {
+        int *ptr1 = syscall(4, 8);
+        *ptr1 = 42;
+        int *ptr2 = syscall(4, 8);
+        *ptr2 = 99;
+        
+        return *ptr1 + *ptr2;
+    }
+    ";
+    let mut cc3 = MiniCC::new(src3);
+    let bin3 = Assembler::compile_bef(&cc3.compile(), &cc3.data);
+    let mut vm3 = Machine::new();
+    vm3.load(&bin3);
+    
+    let mut f3 = 5000;
+    while f3 > 0 && vm3.step().unwrap_or(false) { f3 -= 1; }
+    
+    if let Some(&ans) = vm3.stack.last() {
+        if ans == 141 { report.push_str(pass_msg); } 
+        else { report.push_str(&format!("\x1b[31mFAIL (Returned {})\x1b[0m\n", ans)); }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
+
+    // --- TEST 4: LIBC SHIM (STDIO / STDLIB) ---
+    report.push_str("TEST: LIBC_SHIM_STDIO_STDLIB ...... ");
+    let src4 = "
+    int strlen(char *s) {
+        int len = 0;
+        char *p = s;
+        while (*p) { len = len + 1; p = p + 1; }
+        return len;
+    }
+    int puts(char *s) {
+        return syscall(3, 1, s, strlen(s));
+    }
+    int malloc(int sz) {
+        return syscall(4, sz);
+    }
+    int main() {
+        int *mem = malloc(8);
+        *mem = 42;
+        puts(\"SHIM_OK\");
+        return *mem;
+    }
+    ";
+    let mut cc4 = MiniCC::new(src4);
+    let bin4 = Assembler::compile_bef(&cc4.compile(), &cc4.data);
+    let mut vm4 = Machine::new();
+    vm4.load(&bin4);
+    
+    let mut f4 = 5000;
+    while f4 > 0 && vm4.step().unwrap_or(false) { f4 -= 1; }
+    
+    if let Some(&ans) = vm4.stack.last() {
+        let stdout = vm4.vfs.get("/dev/stdout").unwrap();
+        let stdout_str = String::from_utf8_lossy(stdout);
+        if ans == 42 && stdout_str == "SHIM_OK" { 
+            report.push_str(pass_msg); 
+        } else { 
+            report.push_str(&format!("\x1b[31mFAIL (Ret: {}, Stdout: {})\x1b[0m\n", ans, stdout_str)); 
+        }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
+
+    // --- TEST 5: VT100 / ANSI DISPLAY PROTOCOL ---
+    report.push_str("TEST: VT100_DISPLAY_PROTOCOL ...... ");
+    let src5 = "
+    int strlen(char *s) {
+        int len = 0;
+        char *p = s;
+        while (*p) { len = len + 1; p = p + 1; }
+        return len;
+    }
+    int puts(char *s) {
+        return syscall(3, 1, s, strlen(s));
+    }
+    int main() {
+        puts(\"SYSTEM: \\e[32mSOVEREIGN\\e[0m\\n\");
+        return 0;
+    }
+    ";
+    let mut cc5 = MiniCC::new(src5);
+    let bin5 = Assembler::compile_bef(&cc5.compile(), &cc5.data);
+    let mut vm5 = Machine::new();
+    vm5.load(&bin5);
+    
+    let mut f5 = 5000;
+    while f5 > 0 && vm5.step().unwrap_or(false) { f5 -= 1; }
+    
+    if let Some(&ans) = vm5.stack.last() {
+        let stdout = vm5.vfs.get("/dev/stdout").unwrap();
+        let stdout_str = String::from_utf8_lossy(stdout);
+        // Look for the ANSI sequences
+        if ans == 0 && stdout_str.contains("\x1B[32mSOVEREIGN\x1B[0m") { 
+            report.push_str(pass_msg); 
+        } else { 
+            report.push_str(&format!("\x1b[31mFAIL (Ret: {}, Stdout: {:?})\x1b[0m\n", ans, stdout_str)); 
+        }
+    } else { report.push_str("\x1b[31mFAIL (NO RET)\x1b[0m\n"); }
+
     report
 }
 
