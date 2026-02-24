@@ -536,7 +536,7 @@ impl Machine {
             0x80 => { // SYSCALL
                 let sys_num = self.stack.pop().unwrap();
                 match sys_num {
-                    1 => { // OPEN: syscall(1, addr) -> fd
+                    1 => { // OPEN
                         let addr = self.stack.pop().unwrap() as usize;
                         let mut name = String::new();
                         let mut i = addr;
@@ -548,7 +548,7 @@ impl Machine {
                         self.fds.insert(fd, (name, 0));
                         self.stack.push(fd);
                     }
-                    2 => { // READ: syscall(2, fd, buf_addr, len) -> bytes_read
+                    2 => { // READ
                         let fd = self.stack.pop().unwrap();
                         let buf = self.stack.pop().unwrap() as usize;
                         let len = self.stack.pop().unwrap() as usize;
@@ -565,7 +565,7 @@ impl Machine {
                             self.stack.push(read_bytes as u64);
                         } else { self.stack.push(0); }
                     }
-                    3 => { // WRITE: syscall(3, fd, buf_addr, len) -> bytes_written
+                    3 => { // WRITE
                         let fd = self.stack.pop().unwrap();
                         let buf = self.stack.pop().unwrap() as usize;
                         let len = self.stack.pop().unwrap() as usize;
@@ -585,14 +585,14 @@ impl Machine {
                             self.stack.push(len as u64);
                         } else { self.stack.push(0); }
                     }
-                    4 => { // SBRK: syscall(4, increment) -> old_brk
+                    4 => { // SBRK
                         let inc = self.stack.pop().unwrap() as i64;
                         let old_brk = self.brk;
                         if inc > 0 { self.brk += inc as usize; } 
                         else if inc < 0 { self.brk -= (-inc) as usize; }
                         self.stack.push(old_brk as u64);
                     }
-                    _ => self.stack.push(0), // Unknown Syscall
+                    _ => self.stack.push(0),
                 }
             }
             _ => return Err("Err".into()),
@@ -611,8 +611,7 @@ pub struct DREInstance {
 impl DREInstance {
     #[wasm_bindgen(constructor)]
     pub fn new() -> DREInstance {
-        // Here we inject an actual interactive operating shell and nano-clone written in C!
-        // We use nested if/else statements instead of || or && because MiniCC is strictly C-subset.
+        // Strict MiniCC compliant Shell and Editor
         let src = "
         int strlen(char *s) {
             int len = 0; char *p = s;
@@ -637,19 +636,17 @@ impl DREInstance {
             char *buf = 15000;
             char *line = 16000;
             int pos = 0;
-            int n = 0;
 
             puts(\"\\e[2J\\e[H\\e[36mDRE SECURE SHELL\\e[0m \\e[32mv2.0\\e[0m\\n\");
             puts(\"Type 'help' for commands.\\n> \");
 
             while (1) {
-                n = syscall(2, fd_in, buf, 1);
-                if (n > 0) {
+                int n = syscall(2, fd_in, buf, 1);
+                if (n) {
                     int is_enter = 0;
+                    int is_bs = 0;
                     if (*buf == 13) { is_enter = 1; }
                     if (*buf == 10) { is_enter = 1; }
-
-                    int is_bs = 0;
                     if (*buf == 8) { is_bs = 1; }
                     if (*buf == 127) { is_bs = 1; }
 
@@ -667,8 +664,8 @@ impl DREInstance {
                             int fpos = 0;
                             int editing = 1;
                             while (editing) {
-                                n = syscall(2, fd_in, buf, 1);
-                                if (n > 0) {
+                                int rn = syscall(2, fd_in, buf, 1);
+                                if (rn) {
                                     if (*buf == 27) { 
                                         int fd = syscall(1, \"test.txt\");
                                         syscall(3, fd, fbuf, fpos);
@@ -680,7 +677,7 @@ impl DREInstance {
                                         if (*buf == 127) { b_bs = 1; }
                                         
                                         if (b_bs) {
-                                            if (fpos > 0) {
+                                            if (fpos) {
                                                 puts(\"\\b \\b\");
                                                 fpos = fpos - 1;
                                             }
@@ -698,7 +695,7 @@ impl DREInstance {
                             int fd = syscall(1, \"test.txt\");
                             char *rbuf = 30000;
                             int bytes = syscall(2, fd, rbuf, 1024);
-                            if (bytes > 0) {
+                            if (bytes) {
                                 puts(\"\\e[36m--- test.txt ---\\e[0m\\n\");
                                 char *end = rbuf + bytes; *end = 0;
                                 puts(rbuf);
@@ -707,14 +704,14 @@ impl DREInstance {
                                 puts(\"\\e[31mFile 'test.txt' is empty.\\e[0m\\n\");
                             }
                         } else {
-                            if (pos > 0) {
+                            if (pos) {
                                 puts(\"Unknown command: \"); puts(line); puts(\"\\n\");
                             }
                         }
                         pos = 0;
                         puts(\"> \");
                     } else if (is_bs) {
-                        if (pos > 0) { puts(\"\\b \\b\"); pos = pos - 1; }
+                        if (pos) { puts(\"\\b \\b\"); pos = pos - 1; }
                     } else {
                         syscall(3, fd_out, buf, 1);
                         char *cur = line + pos; *cur = *buf; pos = pos + 1;
@@ -755,14 +752,12 @@ impl DREInstance {
     }
 }
 
-// Restore Automated Test Suite for CLI
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
     let pass_msg = "\x1b[32mPASS\x1b[0m\n";
     
     report.push_str("TEST: SOVEREIGN_COMPILER_PIPELINE ... ");
-    let src1 = "int main() { return 118; }";
-    let mut cc1 = MiniCC::new(src1);
+    let mut cc1 = MiniCC::new("int main() { return 118; }");
     let mut vm1 = Machine::new();
     vm1.load(&Assembler::compile_bef(&cc1.compile(), &cc1.data));
     while vm1.step().unwrap_or(false) {}
