@@ -1,27 +1,28 @@
 use wasm_bindgen::prelude::*;
 use std::collections::HashMap;
 
-pub const MANIFESTO: &str = r#"
+pub const SYSTEM_STATUS: &str = r#"
 ================================================================================
-BILLET // SOVEREIGN EXECUTION SUBSTRATE
+BILLET // DETERMINISTIC EXECUTION ENVIRONMENT
 ================================================================================
-[ MISSION ]
-Build a sovereign, deterministic execution substrate (VFS + ABI).
+[ ARCHITECTURE ]
+Host-Independent VFS + Custom ABI + POSIX Compatibility Layer.
 
-[ ROADMAP ]
-[x] PHASE 1: SUBSTRATE PARITY (CLI/WASM)
-[x] PHASE 2: THE LOADING DOCK (VFS + Syscalls)
-[x] PHASE 3: THE DECEPTION (ISA + Logic + Calling Convention)
-[x] PHASE 4: THE SOVEREIGN BOOTSTRAP (Bridging C)
-    [x] 4.1 Implement Segmented Memory (.text vs .data).
-    [x] 4.2 Implement minimal 'blibc' (POSIX Emulation).
-    [x] 4.3 Establish VFS-to-VFS Build Pipeline.
+[ BUILD LOG ]
+[x] PHASE 1: HOST PARITY (CLI/WASM)
+[x] PHASE 2: SYSTEM INTERFACE (VFS + Syscalls)
+[x] PHASE 3: COMPATIBILITY LAYER (ABI + POSIX Shim)
+[x] PHASE 4: BOOTSTRAP PIPELINE (Self-hosted Compilation)
+    [x] 4.1 Memory Segmentation (.text/.data).
+    [x] 4.2 blibc (Minimal POSIX Implementation).
+    [x] 4.3 VFS-to-VFS Compilation Cycle.
 
 UNIT TEST SUITE:
 "#;
 
 pub struct Compiler;
 impl Compiler {
+    // Bootstrap Assembler: Converts assembly source to BEF binary
     pub fn compile_bef(source: &str, data: &[u8]) -> Vec<u8> {
         let clean: String = source.lines()
             .map(|l| l.split("//").next().unwrap_or("").trim())
@@ -30,6 +31,7 @@ impl Compiler {
         let mut labels = HashMap::new();
         let mut addr = 0;
 
+        // Pass 1: Symbol Resolution
         let mut i = 0;
         while i < tokens.len() {
             let t = tokens[i];
@@ -38,6 +40,7 @@ impl Compiler {
             i += 1;
         }
 
+        // Pass 2: Bytecode Emission
         let mut code = Vec::new();
         let mut i = 0;
         while i < tokens.len() {
@@ -52,6 +55,7 @@ impl Compiler {
                 }
                 "LEA" => {
                     code.push(0x50); i += 1;
+                    // Calculate offset relative to Data Segment base (1024)
                     let target = 1024 + tokens[i].parse::<u64>().unwrap(); 
                     code.extend_from_slice(&target.to_le_bytes());
                 }
@@ -61,6 +65,7 @@ impl Compiler {
             i += 1;
         }
 
+        // Construct BEF Header (Magic: 0xB111E7)
         let mut binary = Vec::new();
         binary.extend_from_slice(&0xB111E7u32.to_le_bytes());
         binary.extend_from_slice(&0u32.to_le_bytes());
@@ -93,8 +98,11 @@ impl Machine {
 
     pub fn load_bef(&mut self, filename: &str) -> Result<(), String> {
         let data = self.vfs.get(filename).ok_or("File not found")?;
+        // Parse Header
         let code_size = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
         let data_size = u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
+        
+        // Load Segments
         self.memory[0..code_size].copy_from_slice(&data[16..16+code_size]);
         if data_size > 0 {
             self.memory[1024..1024+data_size].copy_from_slice(&data[16+code_size..16+code_size+data_size]);
@@ -110,25 +118,25 @@ impl Machine {
 
         match op {
             0x00 => return Ok(false),
-            0x10 => {
+            0x10 => { // PUSH
                 let v = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap());
                 self.ip += 8; self.stack.push(v);
             }
-            0x50 => {
+            0x50 => { // LEA
                 let v = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap());
                 self.ip += 8; self.stack.push(v);
             }
-            0xF0 => {
+            0xF0 => { // SYSCALL INTERFACE
                 let sys_id = self.stack.pop().unwrap();
                 match sys_id {
-                    1 => { // SYS_WRITE
+                    1 => { // SYS_WRITE (POSIX map)
                         let count = self.stack.pop().unwrap() as usize;
                         let buf = self.stack.pop().unwrap() as usize;
                         let fd = self.stack.pop().unwrap();
                         let data = self.memory[buf..buf+count].to_vec();
                         if let Some(name) = self.fds.get(&fd) { self.vfs.insert(name.clone(), data); }
                     }
-                    2 => { // SYS_OPEN
+                    2 => { // SYS_OPEN (POSIX map)
                         let buf = self.stack.pop().unwrap() as usize;
                         let mut end = buf;
                         while self.memory[end] != 0 { end += 1; }
@@ -138,62 +146,62 @@ impl Machine {
                         self.stack.push(fd);
                     }
                     60 => { self.exit_code = Some(self.stack.pop().unwrap()); } // SYS_EXIT
-                    _ => return Err(format!("Sys: {}", sys_id)),
+                    _ => return Err(format!("Unknown Syscall: {}", sys_id)),
                 }
             }
-            _ => return Err(format!("OP: {:02X}", op)),
+            _ => return Err(format!("Invalid Opcode: {:02X}", op)),
         }
         Ok(true)
     }
 }
 
 pub fn run_suite() -> String {
-    let mut report = String::from(MANIFESTO);
-    report.push_str("TEST: VFS_TO_VFS_PIPELINE ... ");
+    let mut report = String::from(SYSTEM_STATUS);
+    report.push_str("TEST: VFS_PIPELINE_INTEGRATION ... ");
 
-    // 1. Setup the Global VFS Ecosystem
-    let mut ecosystem_vfs = HashMap::new();
+    // 1. Initialize VFS
+    let mut vfs = HashMap::new();
 
-    // 2. Write source code to VFS
+    // 2. Inject Source Code
+    // Program: Open 'output.txt', Write 'BOOTSTRAP_OK', Exit.
     let source_code = b"
-        LEA 0 PUSH 2 SYSCALL     // Open 'output.txt'
-        LEA 11 PUSH 12           // Addr and Length of 'BOOTSTRAP_OK'
+        LEA 0 PUSH 2 SYSCALL     // Open file
+        LEA 11 PUSH 12           // Addr, Len
         PUSH 1 SYSCALL           // Write
-        PUSH 0 PUSH 60 SYSCALL   // Exit 0
+        PUSH 0 PUSH 60 SYSCALL   // Exit(0)
     ";
-    ecosystem_vfs.insert("source.s".to_string(), source_code.to_vec());
+    vfs.insert("source.s".to_string(), source_code.to_vec());
     
-    // Data Segment: "output.txt\0" (11 bytes) + "BOOTSTRAP_OK" (12 bytes)
+    // Inject Data Segment
     let mut data_seg = Vec::new();
     data_seg.extend_from_slice(b"output.txt\0");
     data_seg.extend_from_slice(b"BOOTSTRAP_OK");
-    ecosystem_vfs.insert("data.bin".to_string(), data_seg);
+    vfs.insert("data.bin".to_string(), data_seg);
 
-    // 3. The Compiler reads from VFS and writes BEF to VFS
-    let src_str = String::from_utf8_lossy(ecosystem_vfs.get("source.s").unwrap());
-    let data_bin = ecosystem_vfs.get("data.bin").unwrap();
-    let compiled_bef = Compiler::compile_bef(&src_str, data_bin);
-    ecosystem_vfs.insert("program.bef".to_string(), compiled_bef);
+    // 3. Compile (Bootstrap Assembler)
+    let src_str = String::from_utf8_lossy(vfs.get("source.s").unwrap());
+    let data_bin = vfs.get("data.bin").unwrap();
+    let binary = Compiler::compile_bef(&src_str, data_bin);
+    vfs.insert("program.bef".to_string(), binary);
 
-    // 4. Spin up a new VM and inject the ecosystem VFS
+    // 4. Execute (Virtual Machine)
     let mut vm = Machine::new();
-    vm.vfs = ecosystem_vfs;
+    vm.vfs = vfs;
 
-    // 5. VM Loads BEF from its VFS and Executes
     if vm.load_bef("program.bef").is_ok() {
         while vm.step().unwrap_or(false) {}
         
-        // 6. Verify the final output exists in the VFS
+        // 5. Verify Output
         if vm.exit_code == Some(0) {
             if let Some(b) = vm.vfs.get("output.txt") {
                 let s = String::from_utf8_lossy(b);
                 if s == "BOOTSTRAP_OK" { report.push_str("PASS\n"); }
                 else { report.push_str(&format!("FAIL (Content: {})\n", s)); }
-            } else { report.push_str("FAIL (IO)\n"); }
-        } else { report.push_str("FAIL (Exit Code)\n"); }
-    } else { report.push_str("FAIL (Loader)\n"); }
+            } else { report.push_str("FAIL (IO Error)\n"); }
+        } else { report.push_str("FAIL (Non-zero Exit)\n"); }
+    } else { report.push_str("FAIL (Load Error)\n"); }
 
-    report.push_str("\nBILLET ENGINE COMPLETE. READY TO HOST C COMPILER.");
+    report.push_str("\nSYSTEM NOMINAL. READY FOR C COMPILER PORT.");
     report
 }
 
