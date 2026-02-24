@@ -14,7 +14,8 @@ Host-Independent VFS + Custom ABI + POSIX Shim.
     [x] 5.1 Implement Robust v0 Compiler (Stream Parser).
     [x] 5.2 Implement Function support (CALL/RET).
     [x] 5.3 Implement Memory Pointers (PEEK/POKE).
-    [ ] 5.4 String & Buffer Initialization.
+    [x] 5.4 String & Buffer Initialization.
+    [ ] 5.5 Syscall IO & VFS File Operations.
 
 UNIT TEST SUITE:
 "#;
@@ -25,11 +26,12 @@ pub struct V0Compiler {
     functions: HashSet<String>,
     local_offset: usize,
     label_count: usize,
+    heap_offset: usize,
 }
 
 impl V0Compiler {
     pub fn new() -> Self {
-        Self { locals: HashMap::new(), functions: HashSet::new(), local_offset: 0, label_count: 0 }
+        Self { locals: HashMap::new(), functions: HashSet::new(), local_offset: 0, label_count: 0, heap_offset: 2048 }
     }
 
     pub fn compile(&mut self, source: &str) -> Result<String, String> {
@@ -53,6 +55,21 @@ impl V0Compiler {
                     self.local_offset += 8;
                     while tokens[i] != ";" { i += 1; }
                 }
+                "str" => {
+                    let name = &tokens[i+1];
+                    let text = &tokens[i+2];
+                    self.locals.insert(name.clone(), self.local_offset);
+                    out.push_str(&format!("PUSH {} LSTORE {}\n", self.heap_offset, self.local_offset));
+                    self.local_offset += 8;
+                    let mut curr_ptr = self.heap_offset;
+                    for b in text.bytes() {
+                        out.push_str(&format!("PUSH {} PUSH {} STOREB\n", b, curr_ptr));
+                        curr_ptr += 1;
+                    }
+                    out.push_str(&format!("PUSH 0 PUSH {} STOREB\n", curr_ptr));
+                    self.heap_offset = curr_ptr + 1;
+                    while tokens[i] != ";" { i += 1; }
+                }
                 "fn" => {
                     let name = tokens[i+1].clone();
                     self.functions.insert(name.clone());
@@ -71,6 +88,27 @@ impl V0Compiler {
                             out.push_str(&self.gen_load(&tokens[i+2]));
                             out.push_str("ADD\n");
                             out.push_str(&format!("LSTORE {}\n", off));
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "var" {
+                            let name = &tokens[i+1];
+                            let val = &tokens[i+3];
+                            self.locals.insert(name.clone(), self.local_offset);
+                            out.push_str(&format!("PUSH {} LSTORE {}\n", val, self.local_offset));
+                            self.local_offset += 8;
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "str" {
+                            let name = &tokens[i+1];
+                            let text = &tokens[i+2];
+                            self.locals.insert(name.clone(), self.local_offset);
+                            out.push_str(&format!("PUSH {} LSTORE {}\n", self.heap_offset, self.local_offset));
+                            self.local_offset += 8;
+                            let mut curr_ptr = self.heap_offset;
+                            for b in text.bytes() {
+                                out.push_str(&format!("PUSH {} PUSH {} STOREB\n", b, curr_ptr));
+                                curr_ptr += 1;
+                            }
+                            out.push_str(&format!("PUSH 0 PUSH {} STOREB\n", curr_ptr));
+                            self.heap_offset = curr_ptr + 1;
                             while tokens[i] != ";" { i += 1; }
                         } else if tokens[i] == "syscall" {
                             i += 2;
@@ -99,6 +137,21 @@ impl V0Compiler {
                             out.push_str("LOAD\n");
                             out.push_str(&format!("LSTORE {}\n", off));
                             while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "pokeb" {
+                            let ptr = &tokens[i+1];
+                            let val = &tokens[i+2];
+                            out.push_str(&self.gen_load(val));
+                            out.push_str(&self.gen_load(ptr));
+                            out.push_str("STOREB\n");
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "peekb" {
+                            let dest = &tokens[i+1];
+                            let ptr = &tokens[i+2];
+                            let off = *self.locals.get(dest).unwrap();
+                            out.push_str(&self.gen_load(ptr));
+                            out.push_str("LOADB\n");
+                            out.push_str(&format!("LSTORE {}\n", off));
+                            while tokens[i] != ";" { i += 1; }
                         }
                         i += 1;
                     }
@@ -124,6 +177,23 @@ impl V0Compiler {
                     let off = *self.locals.get(dest).unwrap();
                     out.push_str(&self.gen_load(ptr));
                     out.push_str("LOAD\n");
+                    out.push_str(&format!("LSTORE {}\n", off));
+                    while tokens[i] != ";" { i += 1; }
+                }
+                "pokeb" => {
+                    let ptr = &tokens[i+1];
+                    let val = &tokens[i+2];
+                    out.push_str(&self.gen_load(val));
+                    out.push_str(&self.gen_load(ptr));
+                    out.push_str("STOREB\n");
+                    while tokens[i] != ";" { i += 1; }
+                }
+                "peekb" => {
+                    let dest = &tokens[i+1];
+                    let ptr = &tokens[i+2];
+                    let off = *self.locals.get(dest).unwrap();
+                    out.push_str(&self.gen_load(ptr));
+                    out.push_str("LOADB\n");
                     out.push_str(&format!("LSTORE {}\n", off));
                     while tokens[i] != ";" { i += 1; }
                 }
@@ -156,6 +226,27 @@ impl V0Compiler {
                             out.push_str("ADD\n");
                             out.push_str(&format!("LSTORE {}\n", off));
                             while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "var" {
+                            let name = &tokens[i+1];
+                            let val = &tokens[i+3];
+                            self.locals.insert(name.clone(), self.local_offset);
+                            out.push_str(&format!("PUSH {} LSTORE {}\n", val, self.local_offset));
+                            self.local_offset += 8;
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "str" {
+                            let name = &tokens[i+1];
+                            let text = &tokens[i+2];
+                            self.locals.insert(name.clone(), self.local_offset);
+                            out.push_str(&format!("PUSH {} LSTORE {}\n", self.heap_offset, self.local_offset));
+                            self.local_offset += 8;
+                            let mut curr_ptr = self.heap_offset;
+                            for b in text.bytes() {
+                                out.push_str(&format!("PUSH {} PUSH {} STOREB\n", b, curr_ptr));
+                                curr_ptr += 1;
+                            }
+                            out.push_str(&format!("PUSH 0 PUSH {} STOREB\n", curr_ptr));
+                            self.heap_offset = curr_ptr + 1;
+                            while tokens[i] != ";" { i += 1; }
                         } else if tokens[i] == "syscall" {
                             i += 2; // syscall (
                             let id = &tokens[i]; i += 2; // id ,
@@ -181,6 +272,21 @@ impl V0Compiler {
                             let off = *self.locals.get(dest).unwrap();
                             out.push_str(&self.gen_load(ptr));
                             out.push_str("LOAD\n");
+                            out.push_str(&format!("LSTORE {}\n", off));
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "pokeb" {
+                            let ptr = &tokens[i+1];
+                            let val = &tokens[i+2];
+                            out.push_str(&self.gen_load(val));
+                            out.push_str(&self.gen_load(ptr));
+                            out.push_str("STOREB\n");
+                            while tokens[i] != ";" { i += 1; }
+                        } else if tokens[i] == "peekb" {
+                            let dest = &tokens[i+1];
+                            let ptr = &tokens[i+2];
+                            let off = *self.locals.get(dest).unwrap();
+                            out.push_str(&self.gen_load(ptr));
+                            out.push_str("LOADB\n");
                             out.push_str(&format!("LSTORE {}\n", off));
                             while tokens[i] != ";" { i += 1; }
                         }
@@ -244,6 +350,8 @@ impl Assembler {
                 "LSTORE" => { code.push(0x61); i+=1; code.extend_from_slice(&tokens[i].parse::<u64>().unwrap().to_le_bytes()); }
                 "LOAD" => code.push(0x62),
                 "STORE" => code.push(0x63),
+                "LOADB" => code.push(0x64),
+                "STOREB" => code.push(0x65),
                 "CALL" => { code.push(0x80); i+=1; code.extend_from_slice(&(*labels.get(tokens[i]).unwrap() as u64).to_le_bytes()); }
                 "RET" => code.push(0x81),
                 "SYSCALL" => code.push(0xF0),
@@ -312,6 +420,16 @@ impl Machine {
                 let val = self.stack.pop().unwrap();
                 self.memory[addr..addr+8].copy_from_slice(&val.to_le_bytes());
             }
+            0x64 => {
+                let addr = self.stack.pop().unwrap() as usize;
+                let val = self.memory[addr] as u64;
+                self.stack.push(val);
+            }
+            0x65 => {
+                let addr = self.stack.pop().unwrap() as usize;
+                let val = self.stack.pop().unwrap() as u8;
+                self.memory[addr] = val;
+            }
             0x80 => {
                 let t = u64::from_le_bytes(self.memory[self.ip..self.ip+8].try_into().unwrap()) as usize; 
                 self.call_stack.push(self.ip + 8);
@@ -335,10 +453,10 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
-    report.push_str("TEST: V0_MEMORY_POINTERS ... ");
+    report.push_str("TEST: V0_STRINGS_AND_BUFFERS ... ");
 
-    // We test memory operations by pointing to the absolute end of our 8192-byte RAM layout
-    let src = "var ptr = 8184 ; var val = 42 ; poke ptr val ; var res = 0 ; peek res ptr ; syscall ( 1 , res ) ; HALT";
+    // We allocate the string "Hello", then read the first byte ('H' = 72 in ASCII)
+    let src = "str msg Hello ; var res = 0 ; peekb res msg ; syscall ( 1 , res ) ; HALT";
     let mut v0 = V0Compiler::new();
     let asm = v0.compile(src).unwrap();
     let bin = Assembler::compile_bef(&asm);
@@ -350,7 +468,7 @@ pub fn run_suite() -> String {
 
     if let Some(b) = vm.vfs.get("out.dat") {
         let v = u64::from_le_bytes(b.clone().try_into().unwrap());
-        if v == 42 { report.push_str("PASS\n"); }
+        if v == 72 { report.push_str("PASS\n"); }
         else { report.push_str(&format!("FAIL (Val: {})\n", v)); }
     } else { report.push_str("FAIL (IO)\n"); }
     report
