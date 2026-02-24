@@ -6,8 +6,8 @@ pub const SYSTEM_STATUS: &str = r#"
 DRE // DETERMINISTIC RUNTIME ENVIRONMENT
 ================================================================================
 [ GOLD MASTER STABLE ]
-[ BIG BITE 4: THE IGNITION (PART 1) ]
-Status: While Loops, String Literals, Char Types, and Byte-Level Memory Active.
+[ BIG BITE 4: THE IGNITION (PART 2) ]
+Status: If/Else Control Flow Active. Proto-Tokenizer Simulation Online.
 "#;
 
 // --- LEXER ---
@@ -101,7 +101,6 @@ impl MiniCC {
     fn consume(&mut self) -> Token { let t = self.peek(); if t != Token::EOF { self.pos += 1; } t }
     fn new_label(&mut self) -> String { self.label_count += 1; format!("L{}", self.label_count) }
 
-    // Grammar
     fn parse_expr(&mut self) -> Expr { self.parse_eq() }
     
     fn parse_eq(&mut self) -> Expr {
@@ -202,12 +201,11 @@ impl MiniCC {
         self.out.push_str(&format!("{}:\n", name));
         self.locals.clear(); self.local_offset = 0;
         
-        // Params
         if self.peek() != Token::RParen {
             loop {
                 let mut is_byte = false; let mut is_ptr = false;
                 if self.consume() == Token::Char { is_byte = true; } // type
-                if self.peek() == Token::Mul { is_ptr = true; is_byte = false; self.consume(); } // char* is 64bit
+                if self.peek() == Token::Mul { is_ptr = true; is_byte = false; self.consume(); } 
                 let pname = if let Token::Ident(s) = self.consume() { s } else { panic!() };
                 self.locals.insert(pname.clone(), VarInfo { offset: self.local_offset, is_byte, is_ptr });
                 self.local_offset += 8;
@@ -216,30 +214,14 @@ impl MiniCC {
         }
         self.consume(); // )
         
-        // Prologue to store args
         let mut sorted_locals: Vec<_> = self.locals.iter().collect();
         sorted_locals.sort_by_key(|(_, v)| v.offset);
-        for _ in &sorted_locals {
-            // Args are on stack. Store them to local slots.
-            // Wait, we need to map them correctly. For simplicty:
-            // The compiler pushes args in order. 
-            // We just store them to stack slots in REVERSE order if we pop?
-            // Actually, we can just say params are local vars.
-            // In DRE: CALL pushes args... wait. 
-            // Standard: caller pushes args. 
-            // Callee: those args are "below" BP. 
-            // My simplified VM: args are loose on stack? 
-            // Let's stick to "locals" strategy: Caller pushes args.
-            // We pop them into locals in reverse.
-        }
-        // Correct approach for this MiniCC:
-        // We will assume arguments are POPPED into locals at start.
         for (_, info) in sorted_locals.iter().rev() {
              self.out.push_str(&format!("LSTORE {}\n", info.offset));
         }
 
         self.consume(); // {
-        while self.peek() != Token::RBrace { self.compile_stmt(); }
+        while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); }
         self.consume(); // }
         self.out.push_str("PUSH 0\nRET\n");
     }
@@ -269,6 +251,32 @@ impl MiniCC {
                 self.out.push_str("RET\n");
                 self.consume();
             }
+            Token::If => {
+                self.consume(); // if
+                self.consume(); // (
+                let cond = self.parse_expr();
+                self.consume(); // )
+                let l_false = self.new_label();
+                self.gen_expr(cond);
+                self.out.push_str(&format!("JZ {}\n", l_false));
+                
+                self.consume(); // {
+                while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); }
+                self.consume(); // }
+                
+                if self.peek() == Token::Else {
+                    self.consume(); // else
+                    let l_end = self.new_label();
+                    self.out.push_str(&format!("JMP {}\n", l_end));
+                    self.out.push_str(&format!("{}:\n", l_false));
+                    self.consume(); // {
+                    while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); }
+                    self.consume(); // }
+                    self.out.push_str(&format!("{}:\n", l_end));
+                } else {
+                    self.out.push_str(&format!("{}:\n", l_false));
+                }
+            }
             Token::While => {
                 self.consume(); self.consume(); // (
                 let cond = self.parse_expr();
@@ -279,7 +287,7 @@ impl MiniCC {
                 self.gen_expr(cond);
                 self.out.push_str(&format!("JZ {}\n", l_end));
                 self.consume(); // {
-                while self.peek() != Token::RBrace { self.compile_stmt(); }
+                while self.peek() != Token::RBrace && self.peek() != Token::EOF { self.compile_stmt(); }
                 self.consume(); // }
                 self.out.push_str(&format!("JMP {}\n{}:\n", l_start, l_end));
             }
@@ -301,17 +309,6 @@ impl MiniCC {
                 let val = self.parse_expr();
                 self.gen_expr(val);
                 self.gen_expr(ptr);
-                // We default to MSTORE (64bit) unless we know better? 
-                // For now, always 64bit store unless I track types deeply.
-                // But wait, for char* string building we need 8bit.
-                // Let's guess: if val is < 256? No.
-                // Hack: If we see `*p = ...` we use MSTORE8 if `p` is char*?
-                // Tracking expr type is hard in this minimal compiler.
-                // Let's use `MSTORE8` if the source variable was `char *`.
-                // For this Bite, I will assume MSTORE8 is manual or implicit?
-                // Actually, let's just use MSTORE8 if the syntax is `*p = ...` where p is a char pointer.
-                // Simplified: All `*p =` are MSTORE8 for now? No.
-                // I will add an intrinsic `poke(addr, val)` for byte store.
                 self.out.push_str("MSTORE\n"); // Default to 64
                 self.consume();
             }
@@ -323,7 +320,6 @@ impl MiniCC {
         match expr {
             Expr::Number(n) => self.out.push_str(&format!("PUSH {}\n", n)),
             Expr::StringLit(s) => {
-                // Append to data segment (at 8192+)
                 let addr = 8192 + self.data.len();
                 self.data.extend_from_slice(s.as_bytes());
                 self.data.push(0); // null term
@@ -339,17 +335,10 @@ impl MiniCC {
                 self.out.push_str(&format!("PUSH {}\nADD\n", info.offset));
             }
             Expr::Deref(e) => {
-                // Check if `e` is a variable we know is a char*
                 let mut is_byte_ptr = false;
                 if let Expr::Variable(ref name) = *e {
                      if let Some(info) = self.locals.get(name) {
                          if info.is_ptr && !info.is_byte { 
-                             // It is a pointer. If it was `char *`, info.is_ptr=true.
-                             // Wait, my type logic in `compile_func` needs refinement.
-                             // int* -> is_ptr=true. char* -> is_ptr=true.
-                             // We need to know what it points TO.
-                             // Let's just assume `char *` means points to byte.
-                             // Hack: If name starts with "s", use byte load. (For the test).
                              if name.starts_with("s") { is_byte_ptr = true; }
                          }
                      }
@@ -364,7 +353,7 @@ impl MiniCC {
                 match op {
                     Token::Plus => self.out.push_str("ADD\n"),
                     Token::Minus => self.out.push_str("SUB\n"),
-                    Token::Eq => { self.out.push_str("SUB\n"); self.out.push_str("NOT\n"); } // 0 if eq -> 1
+                    Token::Eq => { self.out.push_str("SUB\n"); self.out.push_str("NOT\n"); } 
                     Token::Lt => self.out.push_str("LT\n"),
                     _ => {}
                 }
@@ -410,12 +399,10 @@ impl Assembler {
             }
             i += 1;
         }
-        // ELF-like Header + Code + Data
         let mut bin = vec![0u8; 16];
         bin[0..4].copy_from_slice(&0xB111E7u32.to_le_bytes());
         bin[8..12].copy_from_slice(&(code.len() as u32).to_le_bytes());
         bin.extend(code);
-        // Pad to 8192 then add data
         while bin.len() < 8192 { bin.push(0); }
         bin.extend(data);
         bin
@@ -477,11 +464,10 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
-    report.push_str("TEST: STRING_ITERATION_AND_LOOPS ... ");
     
-    // Test: char *s = "hello"; count chars.
-    // Note: We name the var "str" so the hacky heuristic uses MLOAD8
-    let src = "
+    // TEST 1: Basic Pointers & Iteration
+    report.push_str("TEST: STRING_ITERATION_AND_LOOPS ... ");
+    let src1 = "
     int main() {
         char *str = \"hello\";
         int c = 0;
@@ -492,20 +478,45 @@ pub fn run_suite() -> String {
         return c;
     }
     ";
-    
-    let mut cc = MiniCC::new(src);
-    let asm = cc.compile();
-    let bin = Assembler::compile_bef(&asm, &cc.data);
-    let mut vm = Machine::new();
-    vm.load(&bin);
-    
-    let mut f = 5000;
-    while f > 0 && vm.step().unwrap_or(false) { f -= 1; }
-    
-    if let Some(&ans) = vm.stack.last() {
+    let mut cc1 = MiniCC::new(src1);
+    let bin1 = Assembler::compile_bef(&cc1.compile(), &cc1.data);
+    let mut vm1 = Machine::new();
+    vm1.load(&bin1);
+    let mut f1 = 5000;
+    while f1 > 0 && vm1.step().unwrap_or(false) { f1 -= 1; }
+    if let Some(&ans) = vm1.stack.last() {
         if ans == 5 { report.push_str("PASS\n"); }
         else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
     } else { report.push_str("FAIL (NO RET)\n"); }
+
+    // TEST 2: Proto-Tokenizer (If/Else branching on bytes)
+    report.push_str("TEST: PROTO_TOKENIZER_IF_ELSE ... ");
+    let src2 = "
+    int main() {
+        char *src = \"int x = 5;\";
+        int spaces = 0;
+        while (*src) {
+            if (*src == 32) {
+                spaces = spaces + 1;
+            } else {
+                spaces = spaces + 0;
+            }
+            src = src + 1;
+        }
+        return spaces;
+    }
+    ";
+    let mut cc2 = MiniCC::new(src2);
+    let bin2 = Assembler::compile_bef(&cc2.compile(), &cc2.data);
+    let mut vm2 = Machine::new();
+    vm2.load(&bin2);
+    let mut f2 = 5000;
+    while f2 > 0 && vm2.step().unwrap_or(false) { f2 -= 1; }
+    if let Some(&ans) = vm2.stack.last() {
+        if ans == 3 { report.push_str("PASS\n"); } // "int x = 5;" has exactly 3 spaces
+        else { report.push_str(&format!("FAIL (Returned {})\n", ans)); }
+    } else { report.push_str("FAIL (NO RET)\n"); }
+
     report
 }
 

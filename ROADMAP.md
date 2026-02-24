@@ -11,13 +11,14 @@
 - [x] Big Bite 3: Pointers & Memory.
 
 ## Current: BIG BITE 4 (THE IGNITION)
-### [Bite 4.1] Compiler Substrate (Current)
+### [x] Bite 4.1: Compiler Substrate 
 - [x] Implement `while` loops (Control Flow).
 - [x] Implement String Literals & Data Segment.
 - [x] Implement Byte-Level Memory Access (`MLOAD8`, `char*`).
-- [ ] Verify Self-Hosting Simulation.
+- [x] Verify Self-Hosting Simulation (Proto-Tokenizer).
 
-### [Bite 4.2] The Self-Host
+### [ ] Bite 4.2: The Self-Host (Current)
+- [ ] Implement `if/else` control flow.
 - [ ] Implement Tokenizer in C-subset.
 - [ ] Implement Parser in C-subset.
 - [ ] Compile C-Compiler using Rust-MiniCC.
