@@ -4,11 +4,9 @@
   "version": "0.1.0",
   "files": [
     "vfs_core_bg.wasm",
-    "vfs_core.js",
-    "vfs_core.d.ts"
+    "vfs_core.js"
   ],
   "main": "vfs_core.js",
-  "types": "vfs_core.d.ts",
   "sideEffects": [
     "./snippets/*"
   ]

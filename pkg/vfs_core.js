@@ -1,5 +1,3 @@
-/* @ts-self-types="./vfs_core.d.ts" */
-
 /**
  * @returns {string}
  */

@@ -4,24 +4,33 @@
 <body style="background: #111; color: #ccc; font-family: monospace; padding: 2rem;">
     <div id="term">Booting DRE Substrate...</div>
     <script type="module">
-        import init, { init_shell } from './pkg/vfs_core.js';
-        async function run() {
-            await init();
-            let raw_output = init_shell();
-            
-            // Static VT100 / ANSI Interpretation
-            let html = raw_output
-                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-                .replace(/\x1B\[31m/g, '<span style="color:#ff5555; font-weight:bold;">') // Red
-                .replace(/\x1B\[32m/g, '<span style="color:#55ff55; font-weight:bold;">') // Green
-                .replace(/\x1B\[33m/g, '<span style="color:#ffff55; font-weight:bold;">') // Yellow
-                .replace(/\x1B\[36m/g, '<span style="color:#55ffff; font-weight:bold;">') // Cyan
-                .replace(/\x1B\[0m/g, '</span>') // Reset
-                .replace(/\n/g, '<br>');
+        // Absolute Cache Busting for local dev
+        const cb = new Date().getTime();
+        
+        // Bust the JS module cache
+        import(`./pkg/vfs_core.js?v=${cb}`).then(async (module) => {
+            try {
+                // Bust the WASM binary cache directly in the init() call
+                await module.default(`./pkg/vfs_core_bg.wasm?v=${cb}`);
                 
-            document.getElementById("term").innerHTML = html;
-        }
-        run();
+                let raw_output = module.init_shell();
+                
+                let html = raw_output
+                    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                    .replace(/\x1B\[31m/g, '<span style="color:#ff5555; font-weight:bold;">') // Red
+                    .replace(/\x1B\[32m/g, '<span style="color:#55ff55; font-weight:bold;">') // Green
+                    .replace(/\x1B\[33m/g, '<span style="color:#ffff55; font-weight:bold;">') // Yellow
+                    .replace(/\x1B\[36m/g, '<span style="color:#55ffff; font-weight:bold;">') // Cyan
+                    .replace(/\x1B\[0m/g, '</span>') // Reset
+                    .replace(/\n/g, '<br>');
+                    
+                document.getElementById("term").innerHTML = html;
+            } catch (e) {
+                document.getElementById("term").innerHTML = `<span style="color:#ff5555; font-weight:bold;">WASM PANIC:</span><br>${e}`;
+            }
+        }).catch(e => {
+            document.getElementById("term").innerHTML = `<span style="color:#ff5555; font-weight:bold;">LOAD ERROR:</span><br>${e}`;
+        });
     </script>
 </body>
 </html>

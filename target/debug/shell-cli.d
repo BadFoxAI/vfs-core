@@ -1,1 +1,0 @@
-/workspaces/vfs-core/target/debug/shell-cli: /workspaces/vfs-core/crates/abi/src/isa.rs /workspaces/vfs-core/crates/abi/src/lib.rs /workspaces/vfs-core/crates/abi/src/vm.rs /workspaces/vfs-core/crates/shell-cli/src/main.rs /workspaces/vfs-core/crates/vfs/src/lib.rs
