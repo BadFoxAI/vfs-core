@@ -92,6 +92,15 @@ impl V0Compiler {
                     }
                     out.push_str(&format!("JMP {}\n{}:\n", start_lbl, end_lbl));
                 }
+                "syscall" => {
+                    i += 2;
+                    let id = &tokens[i]; i += 2;
+                    let val = &tokens[i];
+                    out.push_str(&self.gen_load(val));
+                    out.push_str(&self.gen_load(id));
+                    out.push_str("SYSCALL\n");
+                    while tokens[i] != ";" { i += 1; }
+                }
                 "HALT" => out.push_str("HALT\n"),
                 _ => {}
             }
