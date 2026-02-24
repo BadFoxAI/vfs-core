@@ -58,7 +58,6 @@ impl MiniCC {
                     while tokens[i] != ";" { i += 1; }
                 }
             } else if tokens[i] == "str" {
-                // Extension: str name = "value" ;
                 let name = &tokens[i+1];
                 let val = &tokens[i+3];
                 self.locals.insert(name.clone(), self.local_offset);
@@ -73,7 +72,6 @@ impl MiniCC {
                 self.heap_offset = curr_ptr + 1;
                 while tokens[i] != ";" { i += 1; }
             } else if tokens[i] == "poke" {
-                // poke ( addr , val ) ; -> Writes byte
                 i += 2; 
                 let addr = &tokens[i]; i += 2;
                 let val = &tokens[i];
@@ -82,7 +80,6 @@ impl MiniCC {
                 out.push_str("STOREB\n");
                 while tokens[i] != ";" { i += 1; }
             } else if tokens[i] == "syscall" {
-                // syscall ( id , arg1 , arg2 ... ) ;
                 i += 2;
                 let id = tokens[i].clone(); i += 1;
                 let mut args = Vec::new();
@@ -99,11 +96,9 @@ impl MiniCC {
             } else if tokens[i] == "exec" {
                 i += 2;
                 let fname = &tokens[i];
-                // Check if it's a variable or literal
                 if self.locals.contains_key(fname) {
                      out.push_str(&self.gen_load(fname));
                 } else {
-                    // Literal string handling (inline heap alloc)
                     out.push_str(&format!("PUSH {} \n", self.heap_offset));
                     let mut curr_ptr = self.heap_offset;
                     for b in fname.bytes() {
@@ -255,7 +250,6 @@ impl Machine {
                         for (idx, &b) in data.iter().enumerate() { self.memory[buf_ptr + idx] = b; }
                     }
                 } else if id == 3 {
-                    // Syscall 3 (VFS Write): (id, fname_ptr, buf_ptr, len)
                     let fname_ptr = self.stack.pop().unwrap() as usize;
                     let buf_ptr = self.stack.pop().unwrap() as usize;
                     let len = self.stack.pop().unwrap() as usize;
@@ -288,47 +282,30 @@ pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
     report.push_str("TEST: SELF_HOSTING_BOOTSTRAP ... ");
 
-    // We act as a compiler. We manually construct a valid executable binary array in memory,
-    // write it to 'payload.bin', and then exec it.
-    // The payload will simply print 'Z' (90).
-    
-    // Constructing Payload:
-    // Header (16 bytes): [Magic(4) | Size(4) | Padding(8)]
-    // Code: PUSH 90 (0x10, 90...), PUSH 4, SYSCALL, HALT
-    
+    // CLEAN SOURCE without comments to avoid tokenizer confusion
     let c_src = "
         str bin payload.bin ;
         int buf = 4000 ;
         
-        // --- HEADER ---
-        // Magic: B111E700 (Little Endian: E7 11 B1 00 ?) No, u32 0xB111E7 -> E7 11 B1 00
         poke ( buf , 231 ) ; poke ( buf + 1 , 17 ) ; poke ( buf + 2 , 177 ) ; poke ( buf + 3 , 0 ) ;
         
-        // Size: 20 bytes (0x14)
         poke ( buf + 8 , 20 ) ; poke ( buf + 9 , 0 ) ; poke ( buf + 10 , 0 ) ; poke ( buf + 11 , 0 ) ;
         
-        // --- CODE ---
-        // PUSH 90 (0x10 0x5A ...)
         int code = 4016 ;
         poke ( code , 16 ) ; poke ( code + 1 , 90 ) ; 
         poke ( code + 2 , 0 ) ; poke ( code + 3 , 0 ) ; poke ( code + 4 , 0 ) ; 
         poke ( code + 5 , 0 ) ; poke ( code + 6 , 0 ) ; poke ( code + 7 , 0 ) ; poke ( code + 8 , 0 ) ;
         
-        // PUSH 4 (0x10 0x04 ...)
         poke ( code + 9 , 16 ) ; poke ( code + 10 , 4 ) ;
         poke ( code + 11 , 0 ) ; poke ( code + 12 , 0 ) ; poke ( code + 13 , 0 ) ; 
         poke ( code + 14 , 0 ) ; poke ( code + 15 , 0 ) ; poke ( code + 16 , 0 ) ; poke ( code + 17 , 0 ) ;
         
-        // SYSCALL (0xF0)
         poke ( code + 18 , 240 ) ;
         
-        // HALT (0x00)
         poke ( code + 19 , 0 ) ;
         
-        // Write File: syscall(3, name, buf, len) -> Header(16) + Code(20) = 36 bytes
         syscall ( 3 , bin , buf , 36 ) ;
         
-        // Exec
         exec ( bin ) ;
         
         return 0 ;
