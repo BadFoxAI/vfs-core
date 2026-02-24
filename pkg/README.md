@@ -30,3 +30,5 @@ The platform is the VFS, the ABI, and the runtime contract. Everything else is s
 - **Phase 5.3**: Bootstrapped memory pointers. Added `LOAD` and `STORE` opcodes with `peek` and `poke` semantics.
 
 - **Phase 5.4**: Added byte-addressable memory (/) and compile-time string allocation with automatic null-termination.
+
+- **Phase 5.5**: Completed Phase 5! Upgraded `syscall` to support variable arguments and implemented true VFS File Read/Write mapping.

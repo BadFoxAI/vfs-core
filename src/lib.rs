@@ -10,12 +10,14 @@ Host-Independent VFS + Custom ABI + POSIX Shim.
 
 [ BUILD LOG ]
 [x] PHASE 1-4: CORE SYSTEM COMPLETE.
-[~] PHASE 5: BOOTSTRAP TOOLCHAIN (Language v0)
+[x] PHASE 5: BOOTSTRAP TOOLCHAIN (Language v0)
     [x] 5.1 Implement Robust v0 Compiler (Stream Parser).
     [x] 5.2 Implement Function support (CALL/RET).
     [x] 5.3 Implement Memory Pointers (PEEK/POKE).
     [x] 5.4 String & Buffer Initialization.
-    [ ] 5.5 Syscall IO & VFS File Operations.
+    [x] 5.5 Syscall IO & VFS File Operations.
+[~] PHASE 6: C COMPILER BOOTSTRAP
+    [ ] 6.1 Port minimal C compiler to VFS.
 
 UNIT TEST SUITE:
 "#;
@@ -112,10 +114,17 @@ impl V0Compiler {
                             while tokens[i] != ";" { i += 1; }
                         } else if tokens[i] == "syscall" {
                             i += 2;
-                            let id = &tokens[i]; i += 2;
-                            let val = &tokens[i];
-                            out.push_str(&self.gen_load(val));
-                            out.push_str(&self.gen_load(id));
+                            let id = tokens[i].clone();
+                            i += 1;
+                            let mut args = Vec::new();
+                            while tokens[i] != ")" {
+                                if tokens[i] != "," { args.push(tokens[i].clone()); }
+                                i += 1;
+                            }
+                            for arg in args.iter().rev() {
+                                out.push_str(&self.gen_load(arg));
+                            }
+                            out.push_str(&self.gen_load(&id));
                             out.push_str("SYSCALL\n");
                             while tokens[i] != ";" { i += 1; }
                         } else if tokens[i] == "call" {
@@ -248,11 +257,18 @@ impl V0Compiler {
                             self.heap_offset = curr_ptr + 1;
                             while tokens[i] != ";" { i += 1; }
                         } else if tokens[i] == "syscall" {
-                            i += 2; // syscall (
-                            let id = &tokens[i]; i += 2; // id ,
-                            let val = &tokens[i];
-                            out.push_str(&self.gen_load(val));
-                            out.push_str(&self.gen_load(id));
+                            i += 2;
+                            let id = tokens[i].clone();
+                            i += 1;
+                            let mut args = Vec::new();
+                            while tokens[i] != ")" {
+                                if tokens[i] != "," { args.push(tokens[i].clone()); }
+                                i += 1;
+                            }
+                            for arg in args.iter().rev() {
+                                out.push_str(&self.gen_load(arg));
+                            }
+                            out.push_str(&self.gen_load(&id));
                             out.push_str("SYSCALL\n");
                             while tokens[i] != ";" { i += 1; }
                         } else if tokens[i] == "call" {
@@ -296,10 +312,17 @@ impl V0Compiler {
                 }
                 "syscall" => {
                     i += 2;
-                    let id = &tokens[i]; i += 2;
-                    let val = &tokens[i];
-                    out.push_str(&self.gen_load(val));
-                    out.push_str(&self.gen_load(id));
+                    let id = tokens[i].clone();
+                    i += 1;
+                    let mut args = Vec::new();
+                    while tokens[i] != ")" {
+                        if tokens[i] != "," { args.push(tokens[i].clone()); }
+                        i += 1;
+                    }
+                    for arg in args.iter().rev() {
+                        out.push_str(&self.gen_load(arg));
+                    }
+                    out.push_str(&self.gen_load(&id));
                     out.push_str("SYSCALL\n");
                     while tokens[i] != ";" { i += 1; }
                 }
@@ -441,9 +464,38 @@ impl Machine {
             0xF0 => { 
                 let id = self.stack.pop().unwrap(); 
                 if id == 1 { 
+                    // Legacy Syscall 1 (Output Debug Val)
                     let v = self.stack.pop().unwrap(); 
                     self.vfs.insert("out.dat".into(), v.to_le_bytes().to_vec()); 
-                } 
+                } else if id == 2 {
+                    // Syscall 2 (VFS Read): ( id , fname_ptr , buf_ptr )
+                    let fname_ptr = self.stack.pop().unwrap() as usize;
+                    let buf_ptr = self.stack.pop().unwrap() as usize;
+                    let mut fname = String::new();
+                    let mut p = fname_ptr;
+                    while self.memory[p] != 0 {
+                        fname.push(self.memory[p] as char);
+                        p += 1;
+                    }
+                    if let Some(data) = self.vfs.get(&fname) {
+                        for (idx, &b) in data.iter().enumerate() {
+                            self.memory[buf_ptr + idx] = b;
+                        }
+                    }
+                } else if id == 3 {
+                    // Syscall 3 (VFS Write): ( id , fname_ptr , buf_ptr , len )
+                    let fname_ptr = self.stack.pop().unwrap() as usize;
+                    let buf_ptr = self.stack.pop().unwrap() as usize;
+                    let len = self.stack.pop().unwrap() as usize;
+                    let mut fname = String::new();
+                    let mut p = fname_ptr;
+                    while self.memory[p] != 0 {
+                        fname.push(self.memory[p] as char);
+                        p += 1;
+                    }
+                    let data = self.memory[buf_ptr..buf_ptr+len].to_vec();
+                    self.vfs.insert(fname, data);
+                }
             }
             _ => return Err("Err".into()),
         }
@@ -453,24 +505,39 @@ impl Machine {
 
 pub fn run_suite() -> String {
     let mut report = String::from(SYSTEM_STATUS);
-    report.push_str("TEST: V0_STRINGS_AND_BUFFERS ... ");
+    report.push_str("TEST: V0_VFS_FILE_IO ... ");
 
-    // We allocate the string "Hello", then read the first byte ('H' = 72 in ASCII)
-    let src = "str msg Hello ; var res = 0 ; peekb res msg ; syscall ( 1 , res ) ; HALT";
+    // We pre-load a file "in.txt" into VFS containing [10, 20, 30].
+    // Our script reads it into memory at address 5000, and writes it to "out.dat"
+    let src = "
+        str in_name in.txt ;
+        str out_name out.dat ;
+        var buf = 5000 ;
+        var len = 3 ;
+        syscall ( 2 , in_name , buf ) ;
+        syscall ( 3 , out_name , buf , len ) ;
+        HALT
+    ";
     let mut v0 = V0Compiler::new();
     let asm = v0.compile(src).unwrap();
     let bin = Assembler::compile_bef(&asm);
 
     let mut vm = Machine::new();
+    vm.vfs.insert("in.txt".to_string(), vec![10, 20, 30]);
     vm.load(&bin);
+    
     let mut fuel = 1000;
     while fuel > 0 && vm.step().unwrap_or(false) { fuel -= 1; }
 
     if let Some(b) = vm.vfs.get("out.dat") {
-        let v = u64::from_le_bytes(b.clone().try_into().unwrap());
-        if v == 72 { report.push_str("PASS\n"); }
-        else { report.push_str(&format!("FAIL (Val: {})\n", v)); }
-    } else { report.push_str("FAIL (IO)\n"); }
+        if b.len() == 3 && b[0] == 10 && b[1] == 20 && b[2] == 30 { 
+            report.push_str("PASS\n"); 
+        } else { 
+            report.push_str(&format!("FAIL (Bad Data: {:?})\n", b)); 
+        }
+    } else { 
+        report.push_str("FAIL (IO)\n"); 
+    }
     report
 }
 
