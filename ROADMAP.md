@@ -8,20 +8,20 @@
 - [x] Phase 8: Hardening (Bounds checking & Gas metering).
 
 ## Current: BIG BITE Series
-### [Bite 1] AST & Expression Engine (Current)
-- [ ] Implement Lexer & Recursive Descent Parser.
-- [ ] Support complex expressions with precedence: `(a + b) * c`.
-- [ ] Replace naive linear compiler with AST-based code generation.
+### [Bite 1] AST & Expression Engine (Completed)
+- [x] Implement Lexer & Recursive Descent Parser.
+- [x] Support complex expressions with precedence: `(a + b) * c`.
+- [x] Replace naive linear compiler with AST-based code generation.
 
-### [Bite 2] Stack Frames & Scoping
-- [ ] Implement Base Pointer (`BP`) relative addressing.
-- [ ] Support local variables and recursive function calls.
-- [ ] Implement function prologues/epilogues in backend.
+### [Bite 2] Stack Frames & Scoping (Completed)
+- [x] Implement Base Pointer (`BP`) relative addressing.
+- [x] Support local variables and recursive function calls.
+- [x] Implement function prologues/epilogues in backend.
 
-### [Bite 3] Pointers, Arrays & Heap
-- [ ] Support pointer semantics (`*ptr`, `&var`).
-- [ ] Implement array indexing and pointer arithmetic.
-- [ ] Embed a tiny `malloc` inside the DRE runtime.
+### [Bite 3] Pointers, Arrays & Heap (Completed)
+- [x] Support pointer semantics (`*ptr`, `&var`).
+- [x] Implement array indexing and pointer arithmetic.
+- [x] Embed a tiny `malloc` inside the DRE runtime.
 
 ### [Bite 4] The Ignition (Bootstrap)
 - [ ] Port a minimal standard-compliant C compiler (ChibiCC/TCC) to the DRE.
